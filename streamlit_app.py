@@ -1,8 +1,7 @@
-# app.py — versión minimal con filtro multi-género en inglés
+# app.py — minimal con géneros fijos (en inglés)
 import pickle
 from pathlib import Path
 from typing import List, Dict, Any
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -13,13 +12,26 @@ st.set_page_config(page_title="Movie Poster Clusters", layout="wide")
 st.title("🎬 Movie Poster Clusters")
 
 st.caption(
-    "Upload a poster → we embed it and predict its cluster using your trained .pkl. "
-    "Then we show the 5 most representative movies of that cluster and a 2D visualization. "
-    "Use the multi-select genre filter (English)."
+    "Upload a poster → predict its cluster using your trained .pkl → show the 5 most representative "
+    "movies of that cluster → 2D visualization. Genre filter uses a fixed English list."
 )
 
 # -------------------------
-# Simple embedding (replace with your real one)
+# Fixed genre vocabulary (edit if you wish)
+# -------------------------
+FIXED_GENRES = [
+    "Action","Adventure","Animation","Comedy","Crime","Documentary","Drama","Family","Fantasy",
+    "History","Horror","Music","Mystery","Romance","Science Fiction","Thriller","War","Western",
+    "Biography","Sport","Musical","Noir"
+]
+# opcional: normalizador para comparar
+def norm(s: str) -> str:
+    return s.strip().lower()
+
+FIXED_GENRES_NORM = [norm(g) for g in FIXED_GENRES]
+
+# -------------------------
+# Simple embedding (cámbialo por tu pipeline real si usaste otro)
 # -------------------------
 def image_embedding_rgb_hist(img: Image.Image, bins_per_channel: int = 8) -> np.ndarray:
     arr = np.array(img.convert("RGB"))
@@ -32,11 +44,11 @@ def image_embedding_rgb_hist(img: Image.Image, bins_per_channel: int = 8) -> np.
     return vec
 
 def embed_image_query(img: Image.Image, embedder_name: str = "rgb_hist") -> np.ndarray:
-    # Replace this switch with your real pipeline (e.g., CLIP)
+    # Reemplaza por tu extractor real (CLIP, etc.) si entrenaste con otro
     return image_embedding_rgb_hist(img, bins_per_channel=8)
 
 # -------------------------
-# Load artifacts
+# Carga de artefactos
 # -------------------------
 @st.cache_resource(show_spinner=False)
 def load_artifacts(pkl_bytes: bytes) -> Dict[str, Any]:
@@ -45,7 +57,6 @@ def load_artifacts(pkl_bytes: bytes) -> Dict[str, Any]:
     miss = [k for k in req if k not in artifacts]
     if miss:
         raise ValueError(f"Missing keys in .pkl: {miss}")
-
     artifacts["df"] = pd.DataFrame(artifacts["df"])
     artifacts["embeddings"] = np.asarray(artifacts["embeddings"], dtype=np.float32)
     artifacts.setdefault("posters_dir", "posters")
@@ -55,11 +66,32 @@ def load_artifacts(pkl_bytes: bytes) -> Dict[str, Any]:
     return artifacts
 
 # -------------------------
-# Sidebar: model & genre filter
+# Sidebar: modelo y filtro de género (multi-select fijo)
 # -------------------------
 st.sidebar.header("⚙️ Settings")
 pkl_file = st.sidebar.file_uploader("Upload your model (.pkl)", type=["pkl", "pickle"])
 
+selected_genres = st.sidebar.multiselect(
+    "Genres (fixed list, English)",
+    options=FIXED_GENRES,
+    default=[]
+)
+
+# helper: coincide si ALGUNO de los géneros fijos seleccionados aparece en la cadena de géneros del df
+def split_genres_semicolon(s: str) -> List[str]:
+    return [g.strip() for g in str(s).split(";") if g.strip()]
+
+def genre_match(genres_str: str, selected: List[str]) -> bool:
+    if not selected:
+        return True
+    # normalizamos ambas partes para comparar de forma robusta
+    movie_genres_norm = set(norm(g) for g in split_genres_semicolon(genres_str))
+    selected_norm = set(norm(g) for g in selected)
+    return len(movie_genres_norm.intersection(selected_norm)) > 0
+
+# -------------------------
+# Input: imagen y pkl
+# -------------------------
 st.subheader("1) Upload a movie poster")
 up_img_file = st.file_uploader("Image (jpg/png/webp)", type=["jpg", "jpeg", "png", "webp"])
 
@@ -67,7 +99,6 @@ if (pkl_file is None) or (up_img_file is None):
     st.info("Upload both the .pkl model and an image to continue.")
     st.stop()
 
-# Load artifacts
 try:
     artifacts = load_artifacts(pkl_file.read())
 except Exception as e:
@@ -83,21 +114,8 @@ embedder_name = artifacts["embedder_name"]
 proj_2d = artifacts["proj_2d"]
 projector = artifacts["projector"]
 
-# --------- build genre list (English; split by ';') ----------
-def split_genres(s: str) -> List[str]:
-    return [g.strip() for g in str(s).split(";") if g.strip()]
-
-all_genres = sorted({g for s in df["genres"].fillna("") for g in split_genres(s)})
-selected_genres = st.sidebar.multiselect("Genres (select one or more)", options=all_genres, default=[])
-
-def genre_match(genres_str: str, selected: List[str]) -> bool:
-    if not selected:
-        return True
-    gs = set(split_genres(genres_str))
-    return any(g in gs for g in selected)  # match if any selected genre is present
-
 # -------------------------
-# 2) Predict cluster
+# 2) Predicción de cluster
 # -------------------------
 query_img = Image.open(up_img_file).convert("RGB")
 st.image(query_img, caption="Query poster", width=320)
@@ -112,7 +130,7 @@ except Exception as e:
 st.success(f"Predicted cluster: **{cluster_id}**")
 
 # -------------------------
-# 3) Top-5 representatives of that cluster (respect genre filter)
+# 3) Top-5 representativas del cluster (filtradas por géneros fijos)
 # -------------------------
 st.subheader("2) Top-5 representative movies of the predicted cluster")
 
@@ -140,7 +158,7 @@ else:
         st.info("No representatives match the selected genres. Clear the genre filter or adjust your clusters.")
 
 # -------------------------
-# 4) 2D visualization (color by cluster, highlight predicted cluster, respect genre filter)
+# 4) Proyección 2D (también respeta el filtro de géneros fijos)
 # -------------------------
 st.subheader("3) 2D distribution of movies (visual features)")
 
@@ -149,7 +167,6 @@ try:
         if projector is not None:
             proj = projector.transform(embeddings)
         else:
-            # fast PCA-like fallback via SVD
             X = embeddings - embeddings.mean(axis=0, keepdims=True)
             U, S, Vt = np.linalg.svd(X, full_matrices=False)
             proj = (X @ Vt[:2].T)
@@ -176,7 +193,7 @@ except Exception:
 
 plot_df["is_pred_cluster"] = (plot_df["cluster"] == cluster_id)
 
-# apply multi-genre filter to the scatter as well
+# aplicar Filtro de géneros fijos en el scatter
 if selected_genres:
     mask = plot_df["genres"].apply(lambda s: genre_match(str(s), selected_genres))
     plot_df = plot_df[mask]
@@ -192,4 +209,4 @@ chart = alt.Chart(plot_df).mark_circle(size=80).encode(
 st.altair_chart(chart, use_container_width=True)
 
 st.markdown("---")
-st.caption("Genres are parsed from the 'genres' column (semicolon-separated). Multi-select applies to both the representatives and the 2D plot.")
+st.caption("Fixed English genres are used for filtering (semicolon-separated in your df). Matching is case-insensitive; a movie passes if it has ANY of the selected genres.")
