@@ -1,4 +1,4 @@
-import io
+# app.py — versión minimal con filtro multi-género en inglés
 import pickle
 from pathlib import Path
 from typing import List, Dict, Any
@@ -7,28 +7,21 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
-
-# Visualización 2D
 import altair as alt
 
-# ---------------------------------------------------------
-# Config
-# ---------------------------------------------------------
-st.set_page_config(page_title="Clusters de Películas", layout="wide")
-st.title("🎬 Clasificación por Clusters de Pósters")
+st.set_page_config(page_title="Movie Poster Clusters", layout="wide")
+st.title("🎬 Movie Poster Clusters")
 
 st.caption(
-    "Sube un póster, se predice su cluster con tu modelo entrenado (.pkl), "
-    "se muestran 5 películas representativas de ese cluster y se visualiza "
-    "la distribución 2D. Filtro rápido por género incluido."
+    "Upload a poster → we embed it and predict its cluster using your trained .pkl. "
+    "Then we show the 5 most representative movies of that cluster and a 2D visualization. "
+    "Use the multi-select genre filter (English)."
 )
 
-# ---------------------------------------------------------
-# Embedding simple (cámbialo por el que usaste al entrenar)
-# ---------------------------------------------------------
+# -------------------------
+# Simple embedding (replace with your real one)
+# -------------------------
 def image_embedding_rgb_hist(img: Image.Image, bins_per_channel: int = 8) -> np.ndarray:
-    """Histograma RGB normalizado — rápido y sin dependencias pesadas.
-    Sustituye por tu extractor REAL si entrenaste con otro."""
     arr = np.array(img.convert("RGB"))
     hist = []
     for ch in range(3):
@@ -39,104 +32,101 @@ def image_embedding_rgb_hist(img: Image.Image, bins_per_channel: int = 8) -> np.
     return vec
 
 def embed_image_query(img: Image.Image, embedder_name: str = "rgb_hist") -> np.ndarray:
-    if embedder_name == "rgb_hist":
-        return image_embedding_rgb_hist(img, bins_per_channel=8)
-#tod o añade aqui tu pipeline real (CLIP, ResNet, etc.)
+    # Replace this switch with your real pipeline (e.g., CLIP)
     return image_embedding_rgb_hist(img, bins_per_channel=8)
 
-# ---------------------------------------------------------
-# Carga de artefactos
-# ---------------------------------------------------------
+# -------------------------
+# Load artifacts
+# -------------------------
 @st.cache_resource(show_spinner=False)
 def load_artifacts(pkl_bytes: bytes) -> Dict[str, Any]:
     artifacts = pickle.loads(pkl_bytes)
-    required = ["df", "kmeans", "embeddings", "rep_indices"]
-    missing = [k for k in required if k not in artifacts]
-    if missing:
-        raise ValueError(f"Faltan claves en el .pkl: {missing}")
-    # Normalizaciones suaves
-    if "proj_2d" not in artifacts:
-        artifacts["proj_2d"] = None
-    if "projector" not in artifacts:
-        artifacts["projector"] = None
-    if "posters_dir" not in artifacts:
-        artifacts["posters_dir"] = "posters"
-    if "embedder_name" not in artifacts:
-        artifacts["embedder_name"] = "rgb_hist"
-    # Tipos esperados
+    req = ["df", "kmeans", "embeddings", "rep_indices"]
+    miss = [k for k in req if k not in artifacts]
+    if miss:
+        raise ValueError(f"Missing keys in .pkl: {miss}")
+
     artifacts["df"] = pd.DataFrame(artifacts["df"])
     artifacts["embeddings"] = np.asarray(artifacts["embeddings"], dtype=np.float32)
+    artifacts.setdefault("posters_dir", "posters")
+    artifacts.setdefault("embedder_name", "rgb_hist")
+    artifacts.setdefault("proj_2d", None)
+    artifacts.setdefault("projector", None)
     return artifacts
 
-# ---------------------------------------------------------
-# Sidebar: .pkl y género
-# ---------------------------------------------------------
-st.sidebar.header("⚙️ Configuración")
-pkl_file = st.sidebar.file_uploader("Sube tu modelo (.pkl)", type=["pkl", "pickle"])
+# -------------------------
+# Sidebar: model & genre filter
+# -------------------------
+st.sidebar.header("⚙️ Settings")
+pkl_file = st.sidebar.file_uploader("Upload your model (.pkl)", type=["pkl", "pickle"])
 
-genre_filter = st.sidebar.text_input("Filtrar por género (opcional, contiene):").strip().lower()
-
-# ---------------------------------------------------------
-# Entrada: imagen del usuario
-# ---------------------------------------------------------
-st.subheader("1) Subí el póster de la película")
-up_img_file = st.file_uploader("Imagen (jpg/png/webp)", type=["jpg", "jpeg", "png", "webp"])
+st.subheader("1) Upload a movie poster")
+up_img_file = st.file_uploader("Image (jpg/png/webp)", type=["jpg", "jpeg", "png", "webp"])
 
 if (pkl_file is None) or (up_img_file is None):
-    st.info("Sube el archivo .pkl y una imagen para continuar.")
+    st.info("Upload both the .pkl model and an image to continue.")
     st.stop()
 
-# Cargar artefactos
+# Load artifacts
 try:
     artifacts = load_artifacts(pkl_file.read())
 except Exception as e:
-    st.error(f"Error al leer el .pkl: {e}")
+    st.error(f"Couldn't read .pkl: {e}")
     st.stop()
 
 df = artifacts["df"].copy()
 embeddings = artifacts["embeddings"]
 kmeans = artifacts["kmeans"]
 rep_indices: Dict[int, List[int]] = artifacts["rep_indices"]
-posters_dir = Path(artifacts.get("posters_dir", "posters"))
-embedder_name = artifacts.get("embedder_name", "rgb_hist")
-proj_2d = artifacts.get("proj_2d", None)
-projector = artifacts.get("projector", None)
+posters_dir = Path(artifacts["posters_dir"])
+embedder_name = artifacts["embedder_name"]
+proj_2d = artifacts["proj_2d"]
+projector = artifacts["projector"]
 
-# Mostrar imagen de consulta
+# --------- build genre list (English; split by ';') ----------
+def split_genres(s: str) -> List[str]:
+    return [g.strip() for g in str(s).split(";") if g.strip()]
+
+all_genres = sorted({g for s in df["genres"].fillna("") for g in split_genres(s)})
+selected_genres = st.sidebar.multiselect("Genres (select one or more)", options=all_genres, default=[])
+
+def genre_match(genres_str: str, selected: List[str]) -> bool:
+    if not selected:
+        return True
+    gs = set(split_genres(genres_str))
+    return any(g in gs for g in selected)  # match if any selected genre is present
+
+# -------------------------
+# 2) Predict cluster
+# -------------------------
 query_img = Image.open(up_img_file).convert("RGB")
-st.image(query_img, caption="Imagen de consulta", use_column_width=False, width=320)
+st.image(query_img, caption="Query poster", width=320)
 
-# ---------------------------------------------------------
-# 2) Embedding y predicción de cluster
-# ---------------------------------------------------------
 query_vec = embed_image_query(query_img, embedder_name=embedder_name).reshape(1, -1)
 try:
     cluster_id = int(kmeans.predict(query_vec)[0])
 except Exception as e:
-    st.error(f"No se pudo predecir el cluster con tu modelo: {e}")
+    st.error(f"Cluster prediction failed: {e}")
     st.stop()
 
-st.success(f"Cluster asignado: **{cluster_id}**")
+st.success(f"Predicted cluster: **{cluster_id}**")
 
-# ---------------------------------------------------------
-# 3) Top-5 representativas del cluster (con filtro por género opcional)
-# ---------------------------------------------------------
-st.subheader("2) Películas representativas del cluster")
+# -------------------------
+# 3) Top-5 representatives of that cluster (respect genre filter)
+# -------------------------
+st.subheader("2) Top-5 representative movies of the predicted cluster")
+
 indices_cluster = rep_indices.get(cluster_id, [])
 if not indices_cluster:
-    st.warning("No hay índices representativos almacenados para este cluster.")
+    st.warning("No stored representatives for this cluster.")
 else:
-    # Filtro por género (si se escribió algo)
-    def ok_genre(s: str) -> bool:
-        return (genre_filter in s.lower()) if genre_filter else True
-
     shown = 0
     cols = st.columns(5)
-    for i in indices_cluster:
-        if i < 0 or i >= len(df):
+    for idx in indices_cluster:
+        if idx < 0 or idx >= len(df):
             continue
-        row = df.iloc[i]
-        if not ok_genre(str(row.get("genres", ""))):
+        row = df.iloc[idx]
+        if not genre_match(str(row.get("genres", "")), selected_genres):
             continue
         img_path = posters_dir / str(row["poster_path"])
         with cols[shown % 5]:
@@ -147,20 +137,19 @@ else:
         if shown >= 5:
             break
     if shown == 0:
-        st.info("No hay representantes que cumplan el filtro de género. Limpia el filtro o ajusta tus clusters.")
+        st.info("No representatives match the selected genres. Clear the genre filter or adjust your clusters.")
 
-# ---------------------------------------------------------
-# 4) Distribución 2D (resalta el cluster asignado)
-# ---------------------------------------------------------
-st.subheader("3) Distribución 2D (características visuales)")
+# -------------------------
+# 4) 2D visualization (color by cluster, highlight predicted cluster, respect genre filter)
+# -------------------------
+st.subheader("3) 2D distribution of movies (visual features)")
 
-# Calcula/recupera proyección 2D
 try:
     if proj_2d is None:
         if projector is not None:
             proj = projector.transform(embeddings)
         else:
-            # Fallback PCA 2D rápido (sin persistir)
+            # fast PCA-like fallback via SVD
             X = embeddings - embeddings.mean(axis=0, keepdims=True)
             U, S, Vt = np.linalg.svd(X, full_matrices=False)
             proj = (X @ Vt[:2].T)
@@ -168,7 +157,7 @@ try:
     else:
         proj_2d = np.asarray(proj_2d).astype(np.float32)
 except Exception as e:
-    st.error(f"No se pudo calcular/usar la proyección 2D: {e}")
+    st.error(f"2D projection error: {e}")
     st.stop()
 
 plot_df = pd.DataFrame({
@@ -179,29 +168,28 @@ plot_df = pd.DataFrame({
     "genres": df["genres"],
 })
 
-# etiquetas de cluster para color (si existen)
 try:
     labels = kmeans.labels_
     plot_df["cluster"] = labels.astype(int)
 except Exception:
     plot_df["cluster"] = 0
 
-# Marcar cuál es el cluster predicho
-plot_df["is_query_cluster"] = (plot_df["cluster"] == cluster_id)
+plot_df["is_pred_cluster"] = (plot_df["cluster"] == cluster_id)
 
-# Filtro de género opcional también en el scatter
-if genre_filter:
-    plot_df = plot_df[plot_df["genres"].str.lower().str.contains(genre_filter, na=False)]
+# apply multi-genre filter to the scatter as well
+if selected_genres:
+    mask = plot_df["genres"].apply(lambda s: genre_match(str(s), selected_genres))
+    plot_df = plot_df[mask]
 
 chart = alt.Chart(plot_df).mark_circle(size=80).encode(
     x=alt.X("x", title="Dim 1"),
     y=alt.Y("y", title="Dim 2"),
     color=alt.Color("cluster:N", title="Cluster"),
-    opacity=alt.condition("datum.is_query_cluster", alt.value(1.0), alt.value(0.35)),
+    opacity=alt.condition("datum.is_pred_cluster", alt.value(1.0), alt.value(0.35)),
     tooltip=["title","year","genres","cluster"]
 ).properties(height=520).interactive()
 
 st.altair_chart(chart, use_container_width=True)
 
 st.markdown("---")
-st.caption("Tip: guarda en tu .pkl los representantes por cluster y, si puedes, también la proyección 2D entrenada para que todo cargue instantáneamente.")
+st.caption("Genres are parsed from the 'genres' column (semicolon-separated). Multi-select applies to both the representatives and the 2D plot.")
