@@ -72,7 +72,7 @@ st.sidebar.header("⚙️ Settings")
 pkl_file = st.sidebar.file_uploader("Upload your model (.pkl)", type=["pkl", "pickle"])
 
 selected_genres = st.sidebar.multiselect(
-    "Genres (fixed list, English)",
+    "Genres",
     options=FIXED_GENRES,
     default=[]
 )
