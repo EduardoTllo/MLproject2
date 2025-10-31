@@ -248,7 +248,7 @@ def predict_cluster(model: Dict[str, Any], features: np.ndarray) -> int:
 st.title('Movie Poster Cluster Predictor')
 
 uploaded_file = st.file_uploader("Choose a movie poster...", type=['jpg', 'png', 'jpeg'])
-model_file = "best_clustering_model"
+model_file = "best_clustering_model.pkl"
 if model_file is None:
     # Load default model if no file is uploaded
     try:
