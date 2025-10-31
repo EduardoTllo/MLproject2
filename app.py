@@ -6,6 +6,7 @@ from PIL import Image
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any
+from scipy.cluster.hierarchy import linkage, fcluster
 
 EPS = 1e-8
 IMG_EXTS = {".jpg",".jpeg",".png",".bmp",".webp",".jfif",".JPG",".PNG",".JPEG"}
@@ -248,8 +249,10 @@ def predict_cluster(model: Dict[str, Any], features: np.ndarray) -> int:
     # Apply UMAP
     umap_transformed = model['umap'].transform(pca_transformed)
     # Get cluster prediction using the clustering model
-    cluster = model['n_clusters'].predict(umap_transformed)[0]#CAMBIO!!
-    return int(cluster)
+    linkage_avg_pca = linkage(umap_transformed, method='average', metric='euclidean')
+    y_hierarchical_avg_pca = fcluster(linkage_avg_pca, t=10, criterion='maxclust')
+    #cluster = model['n_clusters'].predict(umap_transformed)[0]#CAMBIO!!
+    return int(y_hierarchical_avg_pca)
 
 
 st.title('Movie Poster Cluster Predictor')
