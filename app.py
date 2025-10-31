@@ -206,7 +206,7 @@ def extract_features(img_bgr: np.ndarray, size=(256, 256)):
 def load_model(model_path: str) -> Dict[str, Any]:
     """
     Load the model from a file path or uploaded file object.
-    
+
     Args:
         model_path: Either a string path to local file or StreamlitUploadedFile object
     
@@ -248,7 +248,7 @@ def predict_cluster(model: Dict[str, Any], features: np.ndarray) -> int:
 st.title('Movie Poster Cluster Predictor')
 
 uploaded_file = st.file_uploader("Choose a movie poster...", type=['jpg', 'png', 'jpeg'])
-model_file = st.file_uploader("Upload model file...", type=['pkl'])
+model_file = "best_clustering_model"
 if model_file is None:
     # Load default model if no file is uploaded
     try:
