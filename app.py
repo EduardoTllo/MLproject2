@@ -248,7 +248,7 @@ def predict_cluster(model: Dict[str, Any], features: np.ndarray) -> int:
     # Apply UMAP
     umap_transformed = model['umap'].transform(pca_transformed)
     # Get cluster prediction using the clustering model
-    cluster = model['linkage_matrix'].predict(umap_transformed)[0]#CAMBIO!!
+    cluster = model['cluster_labels'].predict(umap_transformed)[0]#CAMBIO!!
     return int(cluster)
 
 
