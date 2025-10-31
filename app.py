@@ -241,18 +241,42 @@ def load_model(model_path: str) -> Dict[str, Any]:
         raise ValueError(f"Error loading model: {str(e)}")
 
 
+import numpy as np
+from scipy.spatial.distance import cdist
+from typing import Dict, Any
+
+
 def predict_cluster(model: Dict[str, Any], features: np.ndarray) -> int:
-    # Process through pipeline
+    """
+    Predice el clúster para nuevas características usando un enfoque de
+    vecino más cercano en el espacio de incrustación UMAP.
+    """
+
+    if features.ndim == 1:
+        features = features.reshape(1, -1)
+
+    # 1. Pipeline de transformación
     scaled = model['scaler'].transform(features)
-    # Apply PCA
     pca_transformed = model['pca'].transform(scaled)
-    # Apply UMAP
     umap_transformed = model['umap'].transform(pca_transformed)
-    # Get cluster prediction using the clustering model
-    linkage_avg_pca = linkage(umap_transformed, method='average', metric='euclidean')
-    y_hierarchical_avg_pca = fcluster(linkage_avg_pca, t=10, criterion='maxclust')
-    #cluster = model['n_clusters'].predict(umap_transformed)[0]#CAMBIO!!
-    return int(y_hierarchical_avg_pca)
+
+    # 2. Obtener embeddings y etiquetas de entrenamiento
+    try:
+        original_embeddings = model['umap'].embedding_
+    except AttributeError:
+        raise KeyError("No se encontraron los embeddings de entrenamiento "
+                       "en model['umap'].embedding_.")
+
+    original_labels = model['cluster_labels']
+
+    # 3. Encontrar el vecino más cercano en el espacio UMAP
+    distances = cdist(umap_transformed, original_embeddings)
+    nearest_neighbor_index = np.argmin(distances, axis=1)[0]
+
+    # 4. Asignar el clúster de ese vecino
+    cluster = original_labels[nearest_neighbor_index]
+
+    return int(cluster)
 
 
 st.title('Movie Poster Cluster Predictor')
