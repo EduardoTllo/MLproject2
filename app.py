@@ -11,11 +11,18 @@ EPS = 1e-8
 IMG_EXTS = {".jpg",".jpeg",".png",".bmp",".webp",".jfif",".JPG",".PNG",".JPEG"}
 
 
-def preprocess(img_bgr, size=(256,256)):
+def preprocess(img_bgr, size=(256, 256)):
+    # Convert PIL Image to numpy array if needed
+    if not isinstance(img_bgr, np.ndarray):
+        img_bgr = np.array(img_bgr)
+
+    # Convert RGB to BGR if needed (PIL uses RGB, OpenCV uses BGR)
+    if len(img_bgr.shape) == 3 and img_bgr.shape[2] == 3:
+        img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_RGB2BGR)
+
     img = cv2.resize(img_bgr, size, interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return img, gray
-
 # ---------- COLOR ----------
 def hsv_24(img_bgr):
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
