@@ -204,12 +204,33 @@ def extract_features(img_bgr: np.ndarray, size=(256, 256)):
 
 @st.cache_resource
 def load_model(model_path: str) -> Dict[str, Any]:
-    with open(model_path, 'rb') as f:
-        model = pickle.load(f)
-    required_keys = ['scaler', 'pca', 'umap', 'cluster_labels', 'n_clusters']
-    if not all(key in model for key in required_keys):
-        raise ValueError("Missing required model components")
-    return model
+    """
+    Load the model from a file path or uploaded file object.
+    
+    Args:
+        model_path: Either a string path to local file or StreamlitUploadedFile object
+    
+    Returns:
+        Dict containing model components
+    """
+    try:
+        # Handle both string paths and uploaded file objects
+        if isinstance(model_path, str):
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+        else:
+            # For StreamlitUploadedFile
+            model = pickle.load(model_path)
+
+        # Validate model components
+        required_keys = ['scaler', 'pca', 'umap', 'cluster_labels', 'n_clusters']
+        if not all(key in model for key in required_keys):
+            raise ValueError("Missing required model components")
+
+        return model
+
+    except Exception as e:
+        raise ValueError(f"Error loading model: {str(e)}")
 
 
 def predict_cluster(model: Dict[str, Any], features: np.ndarray) -> int:
@@ -228,6 +249,12 @@ st.title('Movie Poster Cluster Predictor')
 
 uploaded_file = st.file_uploader("Choose a movie poster...", type=['jpg', 'png', 'jpeg'])
 model_file = st.file_uploader("Upload model file...", type=['pkl'])
+if model_file is None:
+    # Load default model if no file is uploaded
+    try:
+        model_file = open('best_clustering_model.pkl', 'rb')
+    except FileNotFoundError:
+        st.error("Default model 'best_clustering_model.pkl' not found. Please upload a model file.")
 
 if uploaded_file and model_file:
     # Load and process image
