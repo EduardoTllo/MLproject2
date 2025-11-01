@@ -263,8 +263,8 @@ def load_labels_and_bins():
 @st.cache_data(show_spinner=False)
 def load_train_features():
     try:
-        X_hsv = np.load("X_hsv.npy", mmap_mode="r")
-        X_hsv_ids = np.load("image_ids_train.npy", allow_pickle=True)
+        X_hsv = np.load(path+"Data Modelamiento/X_hsv.npy", mmap_mode="r")
+        X_hsv_ids = np.load(path+"Data Modelamiento/image_ids_train.npy", allow_pickle=True)
         feature_names = [f"feature_{i+1}" for i in range(X_hsv.shape[1])]
         df_X_train = pd.DataFrame(X_hsv, columns=feature_names)
         df_X_train.insert(0, "movieId", X_hsv_ids)
