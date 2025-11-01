@@ -24,42 +24,46 @@ path='LDA_UMAP_DBSCAN/'
 TRAIN_IMAGE_DIR = path+"Train_image"         # carpeta (si la usas)
 TRAIN_IMAGE_RAR = path+"Train_image.rar"     # ruta del .rar con los posters
 
-# --- Buscar imagen en carpeta ---
-def find_image_in_folder(movie_id, folder):
-    for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".PNG"]:
-        p = os.path.join(folder, f"{movie_id}{ext}")
+IMG_EXTS_SET = {".jpg",".jpeg",".png",".webp",".jpg",".png",".jpeg",".webp"}  # tolerante a mayúsculas
+
+def _normalize_id(mid):
+    # fuerza a número y vuelve a string, sin espacios
+    return str(int(mid)).strip()
+
+def find_image_in_folder_by_id(movie_id, folder):
+    base = _normalize_id(movie_id)
+    for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".PNG", ".JPEG", ".WEBP"]:
+        p = os.path.join(folder, base + ext)
         if os.path.exists(p):
             return p
     return None
 
-# --- Buscar imagen dentro de un .rar (devuelve bytes y nombre interno) ---
-def find_image_in_rar(movie_id, rar_path):
+def find_image_in_rar_by_id(movie_id, rar_path):
+    """
+    Devuelve (bytes, nombre_interno) si encuentra el archivo cuyo basename == movieId y
+    la extensión es de imagen. Match EXACTO por basename para evitar confundir 10 con 110.
+    """
     try:
         import rarfile
     except ImportError:
-        raise RuntimeError(
-            "Falta la librería 'rarfile'. Instala con: pip install rarfile"
-        )
+        raise RuntimeError("Instala 'rarfile': pip install rarfile")
 
     if not os.path.exists(rar_path):
         return None, None
 
-    # Cachea el RarFile en sesión para no reabrirlo cada vez
     if "rf_train" not in st.session_state:
-        try:
-            st.session_state["rf_train"] = rarfile.RarFile(rar_path)
-        except Exception as e:
-            raise RuntimeError(f"No se pudo abrir el RAR: {e}")
+        st.session_state["rf_train"] = rarfile.RarFile(rar_path)
 
     rf = st.session_state["rf_train"]
-    # Algunas veces los nombres van con subcarpetas, probamos por sufijo
-    wanted_basenames = [f"{movie_id}{ext}".lower() for ext in [".jpg",".jpeg",".png",".webp",".JPG",".PNG"]]
+    target = _normalize_id(movie_id).lower()
+
     try:
         for info in rf.infolist():
-            name_lower = info.filename.lower()
-            if any(name_lower.endswith(b) for b in wanted_basenames):
+            name = os.path.basename(info.filename)  # ignora subcarpetas
+            stem, ext = os.path.splitext(name)
+            if stem.lower() == target and ext.lower() in IMG_EXTS_SET:
                 with rf.open(info) as f:
-                    return f.read(), info.filename  # bytes, nombre interno
+                    return f.read(), info.filename
     except Exception as e:
         raise RuntimeError(f"Error leyendo del RAR: {e}")
 
@@ -574,17 +578,17 @@ if btn_run:
                     st.error("Selecciona una película del Train")
                     st.stop()
 
-                # 1) Intentar en carpeta
+                # 1) Buscar exactamente 'movieId.ext' en carpeta
                 img_path = None
                 if os.path.isdir(TRAIN_IMAGE_DIR):
-                    img_path = find_image_in_folder(selected_train_movie, TRAIN_IMAGE_DIR)
+                    img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
 
-                # 2) Si no está en carpeta, intentar en RAR
+                # 2) Si no está en carpeta, buscar EXACTO en el RAR por basename
                 img_bytes, rar_name = (None, None)
                 if img_path is None:
                     st.info("Buscando póster dentro del archivo RAR…")
                     try:
-                        img_bytes, rar_name = find_image_in_rar(selected_train_movie, TRAIN_IMAGE_RAR)
+                        img_bytes, rar_name = find_image_in_rar_by_id(selected_train_movie, TRAIN_IMAGE_RAR)
                     except Exception as e:
                         st.error(f"No se pudo acceder al RAR: {e}")
                         st.stop()
@@ -592,27 +596,24 @@ if btn_run:
                 # 3) Mostrar imagen base y extraer features
                 st.subheader("🖼️ Imagen base")
                 if img_path is not None:
-                    # Desde carpeta
                     st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
-                    st.info("Extrayendo características con `build_features` sobre la imagen seleccionada…")
+                    st.info("Extrayendo características con `build_features`…")
                     with open(img_path, "rb") as f:
                         vq, qid = extract_query_features_with_build_features(
-                            f.read(), filename=f"{selected_train_movie}.jpg"
+                            f.read(), filename=f"{_normalize_id(selected_train_movie)}.jpg"
                         )
 
                 elif img_bytes is not None:
-                    # Desde RAR (bytes)
                     st.image(Image.open(io.BytesIO(img_bytes)), width=220,
                              caption=f"movieId {selected_train_movie} (desde RAR)")
                     st.info("Extrayendo características con `build_features` (desde RAR)…")
                     vq, qid = extract_query_features_with_build_features(
-                        img_bytes, filename=f"{selected_train_movie}.jpg"
+                        img_bytes, filename=f"{_normalize_id(selected_train_movie)}.jpg"
                     )
 
                 else:
                     st.error(
-                        "No se encontró el póster ni en la carpeta Train_image ni dentro del RAR. "
-                        "Verifica el movieId, la ruta y la extensión."
+                        "No se encontró el póster ni en la carpeta Train_image ni dentro del RAR con basename igual al movieId."
                     )
                     st.stop()
 
