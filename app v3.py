@@ -574,7 +574,7 @@ if btn_run:
             with colA:
                 st.metric("Cluster asignado (DBSCAN)", str(result["predicted_cluster"]))
             with colB:
-                st.metric("Género predicho (kNN)", result["genre_pred"])
+                st.metric("Género predicho (LDA)", result["genre_pred"])
             if result["use_global"]:
                 st.warning("Cluster muy pequeño o ruido. Se usó búsqueda global en todo el train.")
 
