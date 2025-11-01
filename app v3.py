@@ -227,15 +227,15 @@ def build_features(in_dir, out_dir, size=(256,256)):
     with open(out_dir / "features_meta_test.json", "w") as f:
         json.dump({"num_images": int(len(ids)), "dim": int(X.shape[1]), "headers": headers}, f, indent=2)
     return X, ids, headers
-
+path='LDA_UMAP_DBSCAN/'
 # ===================== CARGA DE DATA =====================
 @st.cache_data(show_spinner=False)
 def load_labels_and_bins():
     try:
-        generos = pd.read_csv('MovieGenre.csv', encoding='latin-1')
-        df_test = pd.read_csv('movies_test.csv')
-        df_train = pd.read_csv('movies_train.csv')
-        ids = pd.read_csv('links.csv')
+        generos = pd.read_csv(path+'MovieGenre.csv', encoding='latin-1')
+        df_test = pd.read_csv(path+'movies_test.csv')
+        df_train = pd.read_csv(path+'movies_train.csv')
+        ids = pd.read_csv(path+'links.csv')
 
         df_test_label = (
             df_test.merge(ids, on='movieId', how='left').merge(generos, on='imdbId', how='left')
