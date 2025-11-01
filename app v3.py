@@ -569,13 +569,12 @@ if btn_run:
             st.success("Búsqueda completada")
 
             # 3) Resumen de predicción
-            colA, colB, colC = st.columns(3)
+            # 3) Resumen de predicción
+            colA, colB = st.columns(2)
             with colA:
                 st.metric("Cluster asignado (DBSCAN)", str(result["predicted_cluster"]))
             with colB:
                 st.metric("Género predicho (kNN)", result["genre_pred"])
-            with colC:
-                st.metric("Confianza género", f"{result['genre_conf']*100:.1f}%")
             if result["use_global"]:
                 st.warning("Cluster muy pequeño o ruido. Se usó búsqueda global en todo el train.")
 
