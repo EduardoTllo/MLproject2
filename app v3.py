@@ -19,6 +19,52 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 import umap
+path='LDA_UMAP_DBSCAN/'
+# --- CONFIG Rutas ---
+TRAIN_IMAGE_DIR = path+"Train_image"         # carpeta (si la usas)
+TRAIN_IMAGE_RAR = path+"Train_image.rar"     # ruta del .rar con los posters
+
+# --- Buscar imagen en carpeta ---
+def find_image_in_folder(movie_id, folder):
+    for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".PNG"]:
+        p = os.path.join(folder, f"{movie_id}{ext}")
+        if os.path.exists(p):
+            return p
+    return None
+
+# --- Buscar imagen dentro de un .rar (devuelve bytes y nombre interno) ---
+def find_image_in_rar(movie_id, rar_path):
+    try:
+        import rarfile
+    except ImportError:
+        raise RuntimeError(
+            "Falta la librería 'rarfile'. Instala con: pip install rarfile"
+        )
+
+    if not os.path.exists(rar_path):
+        return None, None
+
+    # Cachea el RarFile en sesión para no reabrirlo cada vez
+    if "rf_train" not in st.session_state:
+        try:
+            st.session_state["rf_train"] = rarfile.RarFile(rar_path)
+        except Exception as e:
+            raise RuntimeError(f"No se pudo abrir el RAR: {e}")
+
+    rf = st.session_state["rf_train"]
+    # Algunas veces los nombres van con subcarpetas, probamos por sufijo
+    wanted_basenames = [f"{movie_id}{ext}".lower() for ext in [".jpg",".jpeg",".png",".webp",".JPG",".PNG"]]
+    try:
+        for info in rf.infolist():
+            name_lower = info.filename.lower()
+            if any(name_lower.endswith(b) for b in wanted_basenames):
+                with rf.open(info) as f:
+                    return f.read(), info.filename  # bytes, nombre interno
+    except Exception as e:
+        raise RuntimeError(f"Error leyendo del RAR: {e}")
+
+    return None, None
+
 
 # ===================== CONFIG =====================
 st.set_page_config(page_title="Recomendador por Pósters", layout="wide")
@@ -227,7 +273,7 @@ def build_features(in_dir, out_dir, size=(256,256)):
     with open(out_dir / "features_meta_test.json", "w") as f:
         json.dump({"num_images": int(len(ids)), "dim": int(X.shape[1]), "headers": headers}, f, indent=2)
     return X, ids, headers
-path='LDA_UMAP_DBSCAN/'
+
 # ===================== CARGA DE DATA =====================
 @st.cache_data(show_spinner=False)
 def load_labels_and_bins():
@@ -527,16 +573,49 @@ if btn_run:
                 if selected_train_movie is None:
                     st.error("Selecciona una película del Train")
                     st.stop()
-                # Cargar imagen desde carpeta Train_image
-                img_path = find_image(selected_train_movie, "Train_image")
+
+                # 1) Intentar en carpeta
+                img_path = None
+                if os.path.isdir(TRAIN_IMAGE_DIR):
+                    img_path = find_image_in_folder(selected_train_movie, TRAIN_IMAGE_DIR)
+
+                # 2) Si no está en carpeta, intentar en RAR
+                img_bytes, rar_name = (None, None)
                 if img_path is None:
-                    st.error("No se encontró el póster en la carpeta Train_image")
-                    st.stop()
+                    st.info("Buscando póster dentro del archivo RAR…")
+                    try:
+                        img_bytes, rar_name = find_image_in_rar(selected_train_movie, TRAIN_IMAGE_RAR)
+                    except Exception as e:
+                        st.error(f"No se pudo acceder al RAR: {e}")
+                        st.stop()
+
+                # 3) Mostrar imagen base y extraer features
                 st.subheader("🖼️ Imagen base")
-                st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
-                st.info("Extrayendo características con `build_features` sobre la imagen seleccionada...")
-                with open(img_path, "rb") as f:
-                    vq, qid = extract_query_features_with_build_features(f.read(), filename=f"{selected_train_movie}.jpg")
+                if img_path is not None:
+                    # Desde carpeta
+                    st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
+                    st.info("Extrayendo características con `build_features` sobre la imagen seleccionada…")
+                    with open(img_path, "rb") as f:
+                        vq, qid = extract_query_features_with_build_features(
+                            f.read(), filename=f"{selected_train_movie}.jpg"
+                        )
+
+                elif img_bytes is not None:
+                    # Desde RAR (bytes)
+                    st.image(Image.open(io.BytesIO(img_bytes)), width=220,
+                             caption=f"movieId {selected_train_movie} (desde RAR)")
+                    st.info("Extrayendo características con `build_features` (desde RAR)…")
+                    vq, qid = extract_query_features_with_build_features(
+                        img_bytes, filename=f"{selected_train_movie}.jpg"
+                    )
+
+                else:
+                    st.error(
+                        "No se encontró el póster ni en la carpeta Train_image ni dentro del RAR. "
+                        "Verifica el movieId, la ruta y la extensión."
+                    )
+                    st.stop()
+
                 st.success("Características extraídas correctamente")
 
             # 2) Recomendación
