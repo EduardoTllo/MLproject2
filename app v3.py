@@ -19,64 +19,24 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 import umap
-path='LDA_UMAP_DBSCAN/'
-# --- CONFIG Rutas ---
-TRAIN_IMAGE_DIR = path+"Train_image"         # carpeta (si la usas)
-TRAIN_IMAGE_RAR = path+"Train_image.rar"     # ruta del .rar con los posters
 
-IMG_EXTS_SET = {".jpg",".jpeg",".png",".webp",".jpg",".png",".jpeg",".webp"}  # tolerante a mayúsculas
+# ---------------------------------------------------------------------
+# Rutas (usa tu subcarpeta del proyecto)
+# ---------------------------------------------------------------------
+path = 'LDA_UMAP_DBSCAN/'  # ¡tu carpeta base!
+TRAIN_IMAGE_DIR = os.path.join(path, "Train_image")  # carpeta con posters de train
 
-def _normalize_id(mid):
-    # fuerza a número y vuelve a string, sin espacios
-    return str(int(mid)).strip()
-
-def find_image_in_folder_by_id(movie_id, folder):
-    base = _normalize_id(movie_id)
-    for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".PNG", ".JPEG", ".WEBP"]:
-        p = os.path.join(folder, base + ext)
-        if os.path.exists(p):
-            return p
-    return None
-
-def find_image_in_rar_by_id(movie_id, rar_path):
-    """
-    Devuelve (bytes, nombre_interno) si encuentra el archivo cuyo basename == movieId y
-    la extensión es de imagen. Match EXACTO por basename para evitar confundir 10 con 110.
-    """
-    try:
-        import rarfile
-    except ImportError:
-        raise RuntimeError("Instala 'rarfile': pip install rarfile")
-
-    if not os.path.exists(rar_path):
-        return None, None
-
-    if "rf_train" not in st.session_state:
-        st.session_state["rf_train"] = rarfile.RarFile(rar_path)
-
-    rf = st.session_state["rf_train"]
-    target = _normalize_id(movie_id).lower()
-
-    try:
-        for info in rf.infolist():
-            name = os.path.basename(info.filename)  # ignora subcarpetas
-            stem, ext = os.path.splitext(name)
-            if stem.lower() == target and ext.lower() in IMG_EXTS_SET:
-                with rf.open(info) as f:
-                    return f.read(), info.filename
-    except Exception as e:
-        raise RuntimeError(f"Error leyendo del RAR: {e}")
-
-    return None, None
-
-
-# ===================== CONFIG =====================
+# ---------------------------------------------------------------------
+# Config de Streamlit
+# ---------------------------------------------------------------------
 st.set_page_config(page_title="Recomendador por Pósters", layout="wide")
 st.title("🎬 Recomendación de Películas por Similitud Visual")
 st.caption("Sube un póster o elige uno del set de entrenamiento. Se extraen *features* visuales, "
            "se proyecta con LDA+UMAP, se asigna cluster (DBSCAN) y se buscan los 10 más cercanos con kNN.")
 
-# ===================== UTILIDADES ORIGINALES (TUS FUNCIONES) =====================
+# ---------------------------------------------------------------------
+# Utilidades y extracción de features (tus funciones originales)
+# ---------------------------------------------------------------------
 EPS = 1e-8
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif", ".JPG", ".PNG", ".JPEG"}
 
@@ -278,21 +238,51 @@ def build_features(in_dir, out_dir, size=(256,256)):
         json.dump({"num_images": int(len(ids)), "dim": int(X.shape[1]), "headers": headers}, f, indent=2)
     return X, ids, headers
 
-# ===================== CARGA DE DATA =====================
+# ---------------------------------------------------------------------
+# Helpers de imágenes en carpeta (nombres = movieId.ext)
+# ---------------------------------------------------------------------
+def _normalize_id(mid):
+    return str(int(mid)).strip()
+
+def find_image_in_folder_by_id(movie_id, folder):
+    base = _normalize_id(movie_id)
+    for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".PNG", ".JPEG", ".WEBP"]:
+        p = os.path.join(folder, base + ext)
+        if os.path.exists(p):
+            return p
+    return None
+
+# ---------------------------------------------------------------------
+# Carga de datos
+# ---------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_labels_and_bins():
     try:
-        generos = pd.read_csv(path+'MovieGenre.csv', encoding='latin-1')
-        df_test = pd.read_csv(path+'movies_test.csv')
-        df_train = pd.read_csv(path+'movies_train.csv')
-        ids = pd.read_csv(path+'links.csv')
+        generos = pd.read_csv(os.path.join(path, 'MovieGenre.csv'), encoding='latin-1')
+        df_test = pd.read_csv(os.path.join(path, 'movies_test.csv'))
+        df_train = pd.read_csv(os.path.join(path, 'movies_train.csv'))
+        ids = pd.read_csv(os.path.join(path, 'links.csv'))
 
         df_test_label = (
             df_test.merge(ids, on='movieId', how='left').merge(generos, on='imdbId', how='left')
-        )[["movieId", "title", "Genre", "IMDBScore"]].drop_duplicates()
+        ).drop_duplicates()
         df_train_label = (
             df_train.merge(ids, on='movieId', how='left').merge(generos, on='imdbId', how='left')
-        )[["movieId", "title", "Genre", "IMDBScore"]].drop_duplicates()
+        ).drop_duplicates()
+
+        # Detectar el nombre correcto de la columna de puntaje IMDB
+        imdb_col = None
+        for c in ["IMDBScore", "IMDB Score", "IMDB_Score", "IMDB Rating", "IMDB_Rating"]:
+            if c in df_test_label.columns and c in df_train_label.columns:
+                imdb_col = c
+                break
+        if imdb_col is None:
+            imdb_col = "IMDBScore"
+            df_test_label[imdb_col] = np.nan
+            df_train_label[imdb_col] = np.nan
+
+        df_test_label = df_test_label[["movieId", "title", "Genre", imdb_col]]
+        df_train_label = df_train_label[["movieId", "title", "Genre", imdb_col]]
 
         df_test_label["genre_p"] = df_test_label["Genre"].str.split("|").str[0]
         df_train_label["genre_p"] = df_train_label["Genre"].str.split("|").str[0]
@@ -301,10 +291,10 @@ def load_labels_and_bins():
         genre_dummies_test = df_test_label["Genre"].str.get_dummies(sep="|")
 
         df_train_bin = pd.concat(
-            [df_train_label[["movieId", "title", "IMDBScore", "genre_p"]], genre_dummies_train], axis=1
+            [df_train_label[["movieId", "title", imdb_col, "genre_p"]], genre_dummies_train], axis=1
         )
         df_test_bin = pd.concat(
-            [df_test_label[["movieId", "title", "IMDBScore", "genre_p"]], genre_dummies_test], axis=1
+            [df_test_label[["movieId", "title", imdb_col, "genre_p"]], genre_dummies_test], axis=1
         )
         return df_train_label, df_test_label, df_train_bin, df_test_bin
     except Exception as e:
@@ -313,8 +303,8 @@ def load_labels_and_bins():
 @st.cache_data(show_spinner=False)
 def load_train_features():
     try:
-        X_hsv = np.load(path+"Data Modelamiento/X_hsv.npy", mmap_mode="r")
-        X_hsv_ids = np.load(path+"Data Modelamiento/image_ids_train.npy", allow_pickle=True)
+        X_hsv = np.load(os.path.join(path, "Data Modelamiento", "X_hsv.npy"), mmap_mode="r")
+        X_hsv_ids = np.load(os.path.join(path, "Data Modelamiento", "image_ids_train.npy"), allow_pickle=True)
         feature_names = [f"feature_{i+1}" for i in range(X_hsv.shape[1])]
         df_X_train = pd.DataFrame(X_hsv, columns=feature_names)
         df_X_train.insert(0, "movieId", X_hsv_ids)
@@ -323,34 +313,25 @@ def load_train_features():
     except Exception as e:
         raise RuntimeError(f"Error cargando features de entrenamiento (.npy): {e}")
 
-def find_image(movie_id, folder):
-    for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".PNG"]:
-        p = os.path.join(folder, f"{movie_id}{ext}")
-        if os.path.exists(p):
-            return p
-    return None
-
-# ===================== ENTRENAR PROYECCIÓN Y CLUSTER =====================
+# ---------------------------------------------------------------------
+# Entrenar proyección y clustering
+# ---------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def train_projection_and_cluster(df_X_train, df_train_bin):
     try:
-        # join para obtener género principal por movieId
         df = df_X_train.merge(df_train_bin[["movieId", "genre_p"]], on="movieId", how="left")
         df = df.dropna(subset=["genre_p"])
         X = df.drop(columns=["movieId", "genre_p"]).values
-        # encode label
+
         enc = LabelEncoder()
         y = enc.fit_transform(df["genre_p"].astype(str))
 
-        # scaler
         scaler = StandardScaler()
         Xs = scaler.fit_transform(X)
 
-        # LDA
         lda = LinearDiscriminantAnalysis(n_components=2)
         X_lda = lda.fit_transform(Xs, y)
 
-        # UMAP
         reducer = umap.UMAP(
             n_neighbors=30,
             min_dist=0.1,
@@ -359,19 +340,15 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
         )
         X_umap = reducer.fit_transform(X_lda)
 
-        # DBSCAN
         db = DBSCAN(eps=0.8, min_samples=15, metric="euclidean").fit(X_umap)
         labels = db.labels_
 
-        # Vecino global para estimar cluster del query
         nn_global = NearestNeighbors(n_neighbors=5, metric="euclidean")
         nn_global.fit(X_umap)
 
-        # kNN de género sobre el espacio UMAP
         knn_genre = KNeighborsClassifier(n_neighbors=7, metric="euclidean")
         knn_genre.fit(X_umap, y)
 
-        # guardar ids en el mismo orden
         train_ids = df["movieId"].values
 
         return {
@@ -390,7 +367,9 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
     except Exception as e:
         raise RuntimeError(f"Error entrenando proyección y clustering: {e}")
 
-# ===================== SIDEBAR: INPUT =====================
+# ---------------------------------------------------------------------
+# Sidebar: Input
+# ---------------------------------------------------------------------
 st.sidebar.header("Entrada")
 input_mode = st.sidebar.radio(
     "¿Cómo quieres seleccionar la imagen base?",
@@ -404,11 +383,9 @@ selected_train_movie = None
 if input_mode == "Subir imagen":
     uploaded_file = st.sidebar.file_uploader("Sube un póster (JPG, PNG, WEBP)", type=["jpg","jpeg","png","webp"])
 else:
-    # Cargar labels para listar títulos
     try:
         df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
         st.sidebar.success("Metadatos cargados correctamente")
-        # opciones: "movieId - title"
         options = df_train_label.dropna(subset=["movieId","title"]).copy()
         options["opt"] = options["movieId"].astype(int).astype(str) + " - " + options["title"].astype(str)
         selected_opt = st.sidebar.selectbox("Selecciona una película del Train", options["opt"].tolist())
@@ -418,9 +395,10 @@ else:
 
 btn_run = st.sidebar.button("🔎 Recomendar", use_container_width=True)
 
-# ===================== MAIN: CARGA BASES Y MODELO =====================
+# ---------------------------------------------------------------------
+# Estado de carga
+# ---------------------------------------------------------------------
 with st.expander("📦 Estado de carga de datos", expanded=True):
-    # CSVs
     try:
         if "df_train_bin" not in st.session_state:
             df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
@@ -432,7 +410,6 @@ with st.expander("📦 Estado de carga de datos", expanded=True):
     except Exception as e:
         st.error(str(e))
 
-    # Features de train
     try:
         if "df_X_train" not in st.session_state:
             st.session_state["df_X_train"] = load_train_features()
@@ -440,7 +417,6 @@ with st.expander("📦 Estado de carga de datos", expanded=True):
     except Exception as e:
         st.error(str(e))
 
-    # Modelo de proyección y clustering
     try:
         if "model" not in st.session_state:
             st.session_state["model"] = train_projection_and_cluster(
@@ -451,39 +427,32 @@ with st.expander("📦 Estado de carga de datos", expanded=True):
     except Exception as e:
         st.error(str(e))
 
-# ===================== FUNCIÓN: EXTRAER FEATURES DEL INPUT CON build_features =====================
+# ---------------------------------------------------------------------
+# Extraer features del input con build_features
+# ---------------------------------------------------------------------
 def extract_query_features_with_build_features(file_bytes: bytes, filename: str):
-    """
-    Escribe la imagen a un directorio temporal y llama a build_features(in_dir, out_dir).
-    Retorna (vec_features: np.ndarray shape (d,), query_id: str).
-    """
     tmpdir = tempfile.mkdtemp(prefix="query_")
     outdir = tempfile.mkdtemp(prefix="query_feats_")
     try:
-        # guardar imagen como único archivo en tmpdir
         img_path = os.path.join(tmpdir, filename)
         with open(img_path, "wb") as f:
             f.write(file_bytes)
 
         X, ids, _ = build_features(tmpdir, outdir, size=(256,256))
-        # Tomamos el primero
         v = X[0].astype(np.float32)
         qid = str(ids[0])
         return v, qid
     finally:
-        # limpia temporales
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
             shutil.rmtree(outdir, ignore_errors=True)
         except Exception:
             pass
 
-# ===================== FUNCIÓN: PIPELINE DE RECOMENDACIÓN =====================
+# ---------------------------------------------------------------------
+# Recomendación
+# ---------------------------------------------------------------------
 def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = None, topk: int = 10):
-    """
-    v_query: vector de features crudos (dimensionalidad igual al train)
-    Retorna dict con cluster, género_predicho, ids_similares, distancias, etc.
-    """
     model = st.session_state["model"]
     scaler = model["scaler"]
     lda = model["lda"]
@@ -495,38 +464,36 @@ def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = N
     nn_global = model["nn_global"]
     knn_genre = model["knn_genre"]
 
-    # Alinear columnas con el train
     train_cols = model["train_cols"]
-    # v_query ya es un vector en el mismo orden de features (porque usamos build_features igual que en train)
-    # Llevamos a dataframe para poder estandarizar con las mismas columnas
+
+    # Verificación de dimensión
+    if v_query.shape[0] != len(train_cols):
+        raise RuntimeError(
+            f"Dimensión de features del query ({v_query.shape[0]}) no coincide con train ({len(train_cols)}). "
+            "Asegúrate de que los features del train y del query se generen con las mismas funciones y orden."
+        )
+
     df_q = pd.DataFrame([v_query], columns=train_cols)
 
-    # Escalado -> LDA -> UMAP
     vq_scaled = scaler.transform(df_q.values)
     vq_lda = lda.transform(vq_scaled)
     vq_umap = reducer.transform(vq_lda)
 
-    # Estimar cluster: vecino global y mayoría de sus 5 vecinos
     dists, idxs = nn_global.kneighbors(vq_umap, n_neighbors=5, return_distance=True)
     neigh_labels = labels[idxs[0]]
-    # mayoría ignorando -1 si es posible
     lab_candidates = [l for l in neigh_labels if l != -1]
     if len(lab_candidates) == 0:
         predicted_cluster = int(neigh_labels[0])
     else:
-        # conteo simple
         vals, cnts = np.unique(lab_candidates, return_counts=True)
         predicted_cluster = int(vals[np.argmax(cnts)])
 
-    # kNN de género en el espacio UMAP
     genre_idx = int(knn_genre.predict(vq_umap)[0])
     genre_proba = knn_genre.predict_proba(vq_umap)[0]
     top_genre = enc.inverse_transform([genre_idx])[0]
     top_genre_prob = float(np.max(genre_proba))
 
-    # Buscar top-k similares dentro del cluster predicho
     mask_cluster = labels == predicted_cluster
-    # si cluster es ruido o cluster muy pequeño, fallback global
     use_global = False
     if predicted_cluster == -1 or mask_cluster.sum() < topk:
         use_global = True
@@ -550,9 +517,10 @@ def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = N
         "distancias": d[0].tolist()
     }
 
-# ===================== EJECUCIÓN =====================
+# ---------------------------------------------------------------------
+# Ejecución
+# ---------------------------------------------------------------------
 if btn_run:
-    # Validar que el modelo y data existen
     if "model" not in st.session_state or "df_X_train" not in st.session_state:
         st.error("El modelo o las features no están listos. Revisa la sección de estado de carga.")
     else:
@@ -562,11 +530,9 @@ if btn_run:
                 if uploaded_file is None:
                     st.error("Por favor sube una imagen")
                     st.stop()
-                # Vista previa
                 st.subheader("🖼️ Imagen base")
                 st.image(uploaded_file, width=220)
                 st.info("Extrayendo características con `build_features`...")
-                # Extraer features con build_features
                 vq, qid = extract_query_features_with_build_features(
                     uploaded_file.getbuffer().tobytes(),
                     filename=uploaded_file.name if uploaded_file.name else "uploaded.jpg"
@@ -578,22 +544,11 @@ if btn_run:
                     st.error("Selecciona una película del Train")
                     st.stop()
 
-                # 1) Buscar exactamente 'movieId.ext' en carpeta
+                # Buscar exactamente 'movieId.ext' en carpeta
                 img_path = None
                 if os.path.isdir(TRAIN_IMAGE_DIR):
                     img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
 
-                # 2) Si no está en carpeta, buscar EXACTO en el RAR por basename
-                img_bytes, rar_name = (None, None)
-                if img_path is None:
-                    st.info("Buscando póster dentro del archivo RAR…")
-                    try:
-                        img_bytes, rar_name = find_image_in_rar_by_id(selected_train_movie, TRAIN_IMAGE_RAR)
-                    except Exception as e:
-                        st.error(f"No se pudo acceder al RAR: {e}")
-                        st.stop()
-
-                # 3) Mostrar imagen base y extraer features
                 st.subheader("🖼️ Imagen base")
                 if img_path is not None:
                     st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
@@ -602,19 +557,8 @@ if btn_run:
                         vq, qid = extract_query_features_with_build_features(
                             f.read(), filename=f"{_normalize_id(selected_train_movie)}.jpg"
                         )
-
-                elif img_bytes is not None:
-                    st.image(Image.open(io.BytesIO(img_bytes)), width=220,
-                             caption=f"movieId {selected_train_movie} (desde RAR)")
-                    st.info("Extrayendo características con `build_features` (desde RAR)…")
-                    vq, qid = extract_query_features_with_build_features(
-                        img_bytes, filename=f"{_normalize_id(selected_train_movie)}.jpg"
-                    )
-
                 else:
-                    st.error(
-                        "No se encontró el póster ni en la carpeta Train_image ni dentro del RAR con basename igual al movieId."
-                    )
+                    st.error("No se encontró el póster en la carpeta de entrenamiento.")
                     st.stop()
 
                 st.success("Características extraídas correctamente")
@@ -640,7 +584,6 @@ if btn_run:
             ids_sim = result["ids_similares"]
             dists = result["distancias"]
 
-            # grid 5x2
             n_cols = 5
             rows = [ids_sim[i:i+n_cols] for i in range(0, len(ids_sim), n_cols)]
             rows_d = [dists[i:i+n_cols] for i in range(0, len(dists), n_cols)]
@@ -649,7 +592,7 @@ if btn_run:
                 cols = st.columns(n_cols, gap="small")
                 for c, mid, dd in zip(cols, r_ids, r_ds):
                     with c:
-                        p = find_image(mid, "Train_image")
+                        p = find_image_in_folder_by_id(mid, TRAIN_IMAGE_DIR)
                         if p:
                             st.image(p, use_column_width=True)
                         else:
@@ -659,14 +602,16 @@ if btn_run:
         except Exception as e:
             st.error(f"Ocurrió un error: {e}")
 
-# ===================== NOTAS DE ESTADO =====================
+# ---------------------------------------------------------------------
+# Notas
+# ---------------------------------------------------------------------
 with st.expander("ℹ️ Ayuda y notas", expanded=False):
     st.markdown("""
 - **Entrada**: puedes subir un archivo o seleccionar una película del conjunto de entrenamiento.
-- **Extracción de *features***: se realiza **siempre** con tu función `build_features` escribiendo la imagen a un directorio temporal.
+- **Extracción de *features***: siempre con `build_features` escribiendo la imagen a un directorio temporal.
 - **Proyección**: `StandardScaler` → `LDA` (supervisado con género) → `UMAP`.
 - **Clustering**: `DBSCAN` sobre el espacio UMAP. El cluster del query se estima por mayoría de sus 5 vecinos globales.
-- **kNN de género**: clasificador `KNeighborsClassifier` sobre UMAP para predecir el género principal.
-- **Vecinos recomendados**: se buscan 10 más cercanos **dentro del cluster asignado**; si el cluster es ruido o hay pocos, se hace *fallback* a búsqueda global.
+- **kNN de género**: `KNeighborsClassifier` sobre UMAP para predecir el género principal.
+- **Vecinos recomendados**: 10 más cercanos **dentro del cluster**; si el cluster es ruido o pequeño, *fallback* global.
 - **Mensajes**: se notifica cada paso de carga, extracción y recomendación, y se muestran errores cuando corresponde.
 """)
