@@ -239,10 +239,10 @@ def load_labels_and_bins():
 
         df_test_label = (
             df_test.merge(ids, on='movieId', how='left').merge(generos, on='imdbId', how='left')
-        )[["movieId", "title", "Genre", "IMDB Score"]].drop_duplicates()
+        )[["movieId", "title", "Genre", "IMDBScore"]].drop_duplicates()
         df_train_label = (
             df_train.merge(ids, on='movieId', how='left').merge(generos, on='imdbId', how='left')
-        )[["movieId", "title", "Genre", "IMDB Score"]].drop_duplicates()
+        )[["movieId", "title", "Genre", "IMDBScore"]].drop_duplicates()
 
         df_test_label["genre_p"] = df_test_label["Genre"].str.split("|").str[0]
         df_train_label["genre_p"] = df_train_label["Genre"].str.split("|").str[0]
@@ -251,10 +251,10 @@ def load_labels_and_bins():
         genre_dummies_test = df_test_label["Genre"].str.get_dummies(sep="|")
 
         df_train_bin = pd.concat(
-            [df_train_label[["movieId", "title", "IMDB Score", "genre_p"]], genre_dummies_train], axis=1
+            [df_train_label[["movieId", "title", "IMDBScore", "genre_p"]], genre_dummies_train], axis=1
         )
         df_test_bin = pd.concat(
-            [df_test_label[["movieId", "title", "IMDB Score", "genre_p"]], genre_dummies_test], axis=1
+            [df_test_label[["movieId", "title", "IMDBScore", "genre_p"]], genre_dummies_test], axis=1
         )
         return df_train_label, df_test_label, df_train_bin, df_test_bin
     except Exception as e:
