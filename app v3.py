@@ -39,36 +39,39 @@ def find_image_in_folder_by_id(movie_id, folder):
     return None
 
 def find_image_in_rar_by_id(movie_id, rar_path):
-    """
-    Devuelve (bytes, nombre_interno) si encuentra el archivo cuyo basename == movieId y
-    la extensión es de imagen. Match EXACTO por basename para evitar confundir 10 con 110.
-    """
-    try:
-        import rarfile
-    except ImportError:
-        raise RuntimeError("Instala 'rarfile': pip install rarfile")
+    import io
+    import rarfile
 
     if not os.path.exists(rar_path):
         return None, None
+
+    # Verifica que al menos uno esté configurado
+    has_backend = bool(
+        getattr(rarfile, "UNRAR_TOOL", None)
+        or getattr(rarfile, "UNAR_TOOL", None)
+        or getattr(rarfile, "BSDTAR_TOOL", None)
+    )
+    if not has_backend:
+        raise RuntimeError(
+            "No hay backend RAR disponible. Configura rarfile.UNRAR_TOOL "
+            "o rarfile.BSDTAR_TOOL o rarfile.UNAR_TOOL."
+        )
 
     if "rf_train" not in st.session_state:
         st.session_state["rf_train"] = rarfile.RarFile(rar_path)
 
     rf = st.session_state["rf_train"]
-    target = _normalize_id(movie_id).lower()
+    target = str(int(movie_id)).strip().lower()
+    valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
 
-    try:
-        for info in rf.infolist():
-            name = os.path.basename(info.filename)  # ignora subcarpetas
-            stem, ext = os.path.splitext(name)
-            if stem.lower() == target and ext.lower() in IMG_EXTS_SET:
-                with rf.open(info) as f:
-                    return f.read(), info.filename
-    except Exception as e:
-        raise RuntimeError(f"Error leyendo del RAR: {e}")
+    for info in rf.infolist():
+        name = os.path.basename(info.filename)
+        stem, ext = os.path.splitext(name)
+        if stem.lower() == target and ext.lower() in valid_exts:
+            with rf.open(info) as f:
+                return f.read(), info.filename
 
     return None, None
-
 
 # ===================== CONFIG =====================
 st.set_page_config(page_title="Recomendador por Pósters", layout="wide")
