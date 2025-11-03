@@ -5,7 +5,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from collections import deque  # ← necesario para DBSCAN desde cero
+from collections import deque  # para DBSCAN desde cero
 
 import numpy as np
 import pandas as pd
@@ -21,37 +21,32 @@ from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 import umap
 
 # ---------------------------------------------------------------------
-# Rutas (usa tu subcarpeta del proyecto)
+# Rutas
 # ---------------------------------------------------------------------
-path = 'LDA_UMAP_DBSCAN/'  # ¡tu carpeta base!
-TRAIN_IMAGE_DIR = os.path.join(path, "Train_image")  # carpeta con posters de train
+path = 'LDA_UMAP_DBSCAN/'
+TRAIN_IMAGE_DIR = os.path.join(path, "Train_image")
 
 # ---------------------------------------------------------------------
 # Config de Streamlit
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="Recomendador por Pósters", layout="wide")
 st.title("🎬 Recomendación de Películas por Similitud Visual")
-st.caption("Sube un póster o elige uno del set de entrenamiento. Se extraen *features* visuales, "
+st.caption("Sube un póster o elige uno del set de entrenamiento. Se extraen *features*, "
            "se proyecta con LDA+UMAP, se asigna cluster (DBSCAN) y se buscan los 10 más cercanos con kNN.")
 
 # ---------------------------------------------------------------------
 # DBSCAN DESDE CERO
 # ---------------------------------------------------------------------
-# ==========================================================
-# FUNCIÓN PRINCIPAL: DBSCAN desde cero
-# ==========================================================
-def dbscan_desde_cero(X, eps=0.6, min_samples=5):
+def dbscan_desde_cero(X, eps=0.8, min_samples=15):
     n = X.shape[0]
-    labels = np.full(n, -1, dtype=int)   # todos marcados como ruido inicialmente
+    labels = np.full(n, -1, dtype=int)
     visited = np.zeros(n, dtype=bool)
     cluster_id = 0
 
-    # Función auxiliar para obtener los vecinos de un punto
     def obtener_vecinos(idx):
         dists = np.linalg.norm(X - X[idx], axis=1)
         return np.where(dists <= eps)[0]
 
-    # Recorrer cada punto
     for i in range(n):
         if visited[i]:
             continue
@@ -59,29 +54,24 @@ def dbscan_desde_cero(X, eps=0.6, min_samples=5):
         vecinos = obtener_vecinos(i)
 
         if len(vecinos) < min_samples:
-            labels[i] = -1  # ruido
+            labels[i] = -1
         else:
-            # Se crea un nuevo cluster
             cluster_id += 1
             labels[i] = cluster_id
-
-            # Expansión del cluster
             cola = deque(vecinos)
             while cola:
                 j = cola.popleft()
                 if not visited[j]:
                     visited[j] = True
                     vecinos_j = obtener_vecinos(j)
-                    # Si también es núcleo → expandimos
                     if len(vecinos_j) >= min_samples:
                         cola.extend(vecinos_j)
-                # Si aún no pertenece a ningún cluster, se asigna
                 if labels[j] == -1:
                     labels[j] = cluster_id
     return labels
 
 # ---------------------------------------------------------------------
-# Utilidades y extracción de features (tus funciones originales)
+# Utilidades y extracción de features
 # ---------------------------------------------------------------------
 EPS = 1e-8
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif", ".JPG", ".PNG", ".JPEG"}
@@ -277,7 +267,6 @@ def build_features(in_dir, out_dir, size=(256,256)):
     X = np.vstack(X_list).astype(np.float32)
     ids = np.array(ids, dtype=object)
     headers = feature_headers()
-    # Guardados tipo "test"
     np.save(out_dir / "Y_hsv.npy", X)
     np.save(out_dir / "image_ids_test.npy", ids)
     with open(out_dir / "features_meta_test.json", "w") as f:
@@ -285,7 +274,7 @@ def build_features(in_dir, out_dir, size=(256,256)):
     return X, ids, headers
 
 # ---------------------------------------------------------------------
-# Helpers de imágenes en carpeta (nombres = movieId.ext)
+# Helpers de imágenes
 # ---------------------------------------------------------------------
 def _normalize_id(mid):
     return str(int(mid)).strip()
@@ -316,7 +305,6 @@ def load_labels_and_bins():
             df_train.merge(ids, on='movieId', how='left').merge(generos, on='imdbId', how='left')
         ).drop_duplicates()
 
-        # Detectar el nombre correcto de la columna de puntaje IMDB
         imdb_col = None
         for c in ["IMDBScore", "IMDB Score", "IMDB_Score", "IMDB Rating", "IMDB_Rating"]:
             if c in df_test_label.columns and c in df_train_label.columns:
@@ -327,8 +315,9 @@ def load_labels_and_bins():
             df_test_label[imdb_col] = np.nan
             df_train_label[imdb_col] = np.nan
 
-        df_test_label = df_test_label[["movieId", "title","Genre", imdb_col]].rename(columns={"title":"title"})
-        df_train_label = df_train_label[["movieId", "title","Genre", imdb_col]].rename(columns={"title":"title"})
+        # Importante: columna correcta "title"
+        df_test_label = df_test_label[["movieId", "title", "Genre", imdb_col]]
+        df_train_label = df_train_label[["movieId", "title", "Genre", imdb_col]]
 
         df_test_label["genre_p"] = df_test_label["Genre"].str.split("|").str[0]
         df_train_label["genre_p"] = df_train_label["Genre"].str.split("|").str[0]
@@ -386,7 +375,7 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
         )
         X_umap = reducer.fit_transform(X_lda)
 
-        # ---- DBSCAN desde cero (en el espacio UMAP) ----
+        # DBSCAN desde cero en UMAP
         eps = 0.8
         min_samples = 15
         labels = dbscan_desde_cero(X_umap, eps=eps, min_samples=min_samples)
@@ -403,7 +392,7 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
             "scaler": scaler,
             "lda": lda,
             "umap": reducer,
-            "labels": labels,                   # etiquetas de DBSCAN desde cero
+            "labels": labels,
             "dbscan_params": {"eps": eps, "min_samples": min_samples},
             "X_umap": X_umap,
             "train_ids": train_ids,
@@ -476,7 +465,7 @@ with st.expander("📦 Estado de carga de datos", expanded=True):
         st.error(str(e))
 
 # ---------------------------------------------------------------------
-# Extraer features del input con build_features
+# Extraer features del input
 # ---------------------------------------------------------------------
 def extract_query_features_with_build_features(file_bytes: bytes, filename: str):
     tmpdir = tempfile.mkdtemp(prefix="query_")
@@ -498,9 +487,12 @@ def extract_query_features_with_build_features(file_bytes: bytes, filename: str)
             pass
 
 # ---------------------------------------------------------------------
-# Recomendación
+# Recomendación con exclusión de IDs
 # ---------------------------------------------------------------------
-def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = None, topk: int = 10):
+def recommend_from_feature_vector(v_query: np.ndarray, exclude_ids=None, topk: int = 10):
+    if exclude_ids is None:
+        exclude_ids = []
+
     model = st.session_state["model"]
     scaler = model["scaler"]
     lda = model["lda"]
@@ -511,7 +503,6 @@ def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = N
     enc = model["label_encoder"]
     nn_global = model["nn_global"]
     knn_genre = model["knn_genre"]
-
     train_cols = model["train_cols"]
 
     # Verificación de dimensión
@@ -522,25 +513,37 @@ def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = N
         )
 
     df_q = pd.DataFrame([v_query], columns=train_cols)
-
     vq_scaled = scaler.transform(df_q.values)
     vq_lda = lda.transform(vq_scaled)
     vq_umap = reducer.transform(vq_lda)
 
-    dists, idxs = nn_global.kneighbors(vq_umap, n_neighbors=5, return_distance=True)
+    # Vecinos globales para estimar cluster, excluyendo IDs si toca
+    dists, idxs = nn_global.kneighbors(vq_umap, n_neighbors=7, return_distance=True)
+    neigh_ids = train_ids[idxs[0]]
     neigh_labels = labels[idxs[0]]
-    lab_candidates = [l for l in neigh_labels if l != -1]
-    if len(lab_candidates) == 0:
-        predicted_cluster = int(neigh_labels[0])
-    else:
-        vals, cnts = np.unique(lab_candidates, return_counts=True)
-        predicted_cluster = int(vals[np.argmax(cnts)])
 
+    # Filtrar excluidos
+    mask_keep = ~np.isin(neigh_ids, np.array(exclude_ids, dtype=train_ids.dtype))
+    neigh_labels = neigh_labels[mask_keep]
+
+    # Mayoría sobre vecinos no excluidos
+    if len(neigh_labels) == 0:
+        predicted_cluster = -1
+    else:
+        lab_candidates = [l for l in neigh_labels if l != -1]
+        if len(lab_candidates) == 0:
+            predicted_cluster = int(neigh_labels[0])
+        else:
+            vals, cnts = np.unique(lab_candidates, return_counts=True)
+            predicted_cluster = int(vals[np.argmax(cnts)])
+
+    # Predicción de género
     genre_idx = int(knn_genre.predict(vq_umap)[0])
     genre_proba = knn_genre.predict_proba(vq_umap)[0]
     top_genre = enc.inverse_transform([genre_idx])[0]
     top_genre_prob = float(np.max(genre_proba))
 
+    # Espacio base por cluster
     mask_cluster = labels == predicted_cluster
     use_global = False
     if predicted_cluster == -1 or mask_cluster.sum() < topk:
@@ -551,7 +554,24 @@ def recommend_from_feature_vector(v_query: np.ndarray, query_label_hint: str = N
         base_space = X_umap[mask_cluster]
         base_ids = train_ids[mask_cluster]
 
-    nn = NearestNeighbors(n_neighbors=topk, metric="euclidean")
+    # Excluir IDs antes de buscar vecinos finales
+    if len(exclude_ids) > 0:
+        valid_mask = ~np.isin(base_ids, np.array(exclude_ids, dtype=base_ids.dtype))
+        base_space = base_space[valid_mask]
+        base_ids = base_ids[valid_mask]
+
+    if base_space.shape[0] == 0:
+        return {
+            "predicted_cluster": predicted_cluster,
+            "use_global": True,
+            "genre_pred": top_genre,
+            "genre_conf": top_genre_prob,
+            "ids_similares": [],
+            "distancias": []
+        }
+
+    k = min(topk, base_space.shape[0])
+    nn = NearestNeighbors(n_neighbors=k, metric="euclidean")
     nn.fit(base_space)
     d, ix = nn.kneighbors(vq_umap)
     ids_similares = [int(base_ids[j]) for j in ix[0]]
@@ -573,7 +593,9 @@ if btn_run:
         st.error("El modelo o las features no están listos. Revisa la sección de estado de carga.")
     else:
         try:
-            # 1) Obtener imagen base y mostrarla
+            exclude_ids = []
+
+            # 1) Obtener imagen base
             if input_mode == "Subir imagen":
                 if uploaded_file is None:
                     st.error("Por favor sube una imagen")
@@ -585,6 +607,14 @@ if btn_run:
                     uploaded_file.getbuffer().tobytes(),
                     filename=uploaded_file.name if uploaded_file.name else "uploaded.jpg"
                 )
+                # si el nombre del archivo es un movieId que existe en train, excluirlo
+                try:
+                    qid_int = int(str(qid))
+                    model = st.session_state["model"]
+                    if qid_int in set(model["train_ids"].tolist()):
+                        exclude_ids = [qid_int]
+                except Exception:
+                    pass
                 st.success("Características extraídas correctamente")
 
             else:
@@ -592,7 +622,6 @@ if btn_run:
                     st.error("Selecciona una película del Train")
                     st.stop()
 
-                # Buscar exactamente 'movieId.ext' en carpeta
                 img_path = None
                 if os.path.isdir(TRAIN_IMAGE_DIR):
                     img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
@@ -609,14 +638,16 @@ if btn_run:
                     st.error("No se encontró el póster en la carpeta de entrenamiento.")
                     st.stop()
 
+                # Siempre excluimos el propio ID cuando se elige de train
+                exclude_ids = [selected_train_movie]
                 st.success("Características extraídas correctamente")
 
             # 2) Recomendación
             st.info("Calculando proyección, asignando cluster y encontrando vecinos...")
-            result = recommend_from_feature_vector(vq, topk=10)
+            result = recommend_from_feature_vector(vq, exclude_ids=exclude_ids, topk=10)
             st.success("Búsqueda completada")
 
-            # 3) Resumen de predicción
+            # 3) Resumen
             colA, colB = st.columns(2)
             with colA:
                 st.metric("Cluster asignado (DBSCAN)", str(result["predicted_cluster"]))
@@ -624,26 +655,31 @@ if btn_run:
                 st.metric("Género predicho", result["genre_pred"])
             if result["use_global"]:
                 st.warning("Cluster muy pequeño o ruido. Se usó búsqueda global en todo el train.")
+            if exclude_ids:
+                st.info(f"Se excluyó el ID {exclude_ids[0]} de los resultados para evitar auto-match.")
 
-            # 4) Mostrar 10 pósters más parecidos
+            # 4) Mostrar recomendaciones
             st.subheader("🎯 Recomendaciones visualmente similares (KNN)")
             ids_sim = result["ids_similares"]
             dists = result["distancias"]
 
-            n_cols = 5
-            rows = [ids_sim[i:i+n_cols] for i in range(0, len(ids_sim), n_cols)]
-            rows_d = [dists[i:i+n_cols] for i in range(0, len(dists), n_cols)]
+            if len(ids_sim) == 0:
+                st.write("No se encontraron vecinos tras excluir el ID del query.")
+            else:
+                n_cols = 5
+                rows = [ids_sim[i:i+n_cols] for i in range(0, len(ids_sim), n_cols)]
+                rows_d = [dists[i:i+n_cols] for i in range(0, len(dists), n_cols)]
 
-            for r_ids, r_ds in zip(rows, rows_d):
-                cols = st.columns(n_cols, gap="small")
-                for c, mid, dd in zip(cols, r_ids, r_ds):
-                    with c:
-                        p = find_image_in_folder_by_id(mid, TRAIN_IMAGE_DIR)
-                        if p:
-                            st.image(p, use_column_width=True)
-                        else:
-                            st.info("Imagen no encontrada")
-                        st.caption(f"movieId {mid} • dist {dd:.3f}")
+                for r_ids, r_ds in zip(rows, rows_d):
+                    cols = st.columns(n_cols, gap="small")
+                    for c, mid, dd in zip(cols, r_ids, r_ds):
+                        with c:
+                            p = find_image_in_folder_by_id(mid, TRAIN_IMAGE_DIR)
+                            if p:
+                                st.image(p, use_column_width=True)
+                            else:
+                                st.info("Imagen no encontrada")
+                            st.caption(f"movieId {mid} • dist {dd:.3f}")
 
         except Exception as e:
             st.error(f"Ocurrió un error: {e}")
@@ -653,11 +689,7 @@ if btn_run:
 # ---------------------------------------------------------------------
 with st.expander("ℹ️ Ayuda y notas", expanded=False):
     st.markdown("""
-- **Entrada**: puedes subir un archivo o seleccionar una película del conjunto de entrenamiento.
-- **Extracción de *features***: siempre con build_features escribiendo la imagen a un directorio temporal.
-- **Proyección**: StandardScaler → LDA (supervisado con género) → UMAP.
-- **Clustering**: DBSCAN (implementación propia) sobre el espacio UMAP. El cluster del query se estima por mayoría de sus 5 vecinos globales.
-- **kNN de género**: KNeighborsClassifier sobre UMAP para predecir el género principal.
-- **Vecinos recomendados**: 10 más cercanos **dentro del cluster**; si el cluster es ruido o pequeño, *fallback* global.
-- **Mensajes**: se notifica cada paso de carga, extracción y recomendación, y se muestran errores cuando corresponde.
+- Se evita el *data leakage* y el auto-match excluyendo el `movieId` del query cuando está presente en **train**.
+- Si subes un archivo cuyo nombre es el `movieId` y existe en train, también se excluye.
+- Pipeline: StandardScaler → LDA → UMAP → DBSCAN propio → kNN sobre UMAP.
 """)
