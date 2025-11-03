@@ -49,8 +49,22 @@ TRAIN_IMAGE_DIR = os.path.join(path, "Train_image")
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="Recomendador por Pósters", layout="wide")
 st.title("🎬 Recomendación de Películas por Similitud Visual")
-st.caption("Sube un póster o elige uno del set de entrenamiento. Se extraen *features*, "
-           "se proyecta con LDA+UMAP, se asigna cluster (DBSCAN) y se buscan los 10 más cercanos con kNN.")
+
+st.markdown(
+    """
+**¿Cómo funciona?**  
+1) **Entrada**: sube un póster o elige uno del set de entrenamiento.  
+2) **Extracción**: obtenemos rasgos visuales de color (HSV), textura (LBP, GLCM), bordes (HOG) y forma (Hu).  
+3) **Proyección**: mapeamos el espacio a 2D con **LDA → UMAP** para que la distancia ≈ similitud visual.  
+4) **Clustering**: detectamos grupos naturales con **DBSCAN** (sin forzar forma ni número de clusters).  
+5) **Recomendación**: buscamos los **10** más cercanos con **kNN** sobre la proyección.
+
+**Mejora opcional**  
+- Activa el **reequilibrio por género** para que el *top* no se sesgue hacia géneros sobrerrepresentados en el *train*.  
+- Además, te mostramos **sugerencias de géneros minoritarios** más cercanos al query.
+"""
+)
+
 
 # ---------------------------------------------------------------------
 # DBSCAN DESDE CERO
