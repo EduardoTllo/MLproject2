@@ -5,6 +5,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from collections import deque  # ← necesario para DBSCAN desde cero
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,6 @@ from PIL import Image
 from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 import umap
 
@@ -33,6 +33,52 @@ st.set_page_config(page_title="Recomendador por Pósters", layout="wide")
 st.title("🎬 Recomendación de Películas por Similitud Visual")
 st.caption("Sube un póster o elige uno del set de entrenamiento. Se extraen *features* visuales, "
            "se proyecta con LDA+UMAP, se asigna cluster (DBSCAN) y se buscan los 10 más cercanos con kNN.")
+
+# ---------------------------------------------------------------------
+# DBSCAN DESDE CERO
+# ---------------------------------------------------------------------
+# ==========================================================
+# FUNCIÓN PRINCIPAL: DBSCAN desde cero
+# ==========================================================
+def dbscan_desde_cero(X, eps=0.6, min_samples=5):
+    n = X.shape[0]
+    labels = np.full(n, -1, dtype=int)   # todos marcados como ruido inicialmente
+    visited = np.zeros(n, dtype=bool)
+    cluster_id = 0
+
+    # Función auxiliar para obtener los vecinos de un punto
+    def obtener_vecinos(idx):
+        dists = np.linalg.norm(X - X[idx], axis=1)
+        return np.where(dists <= eps)[0]
+
+    # Recorrer cada punto
+    for i in range(n):
+        if visited[i]:
+            continue
+        visited[i] = True
+        vecinos = obtener_vecinos(i)
+
+        if len(vecinos) < min_samples:
+            labels[i] = -1  # ruido
+        else:
+            # Se crea un nuevo cluster
+            cluster_id += 1
+            labels[i] = cluster_id
+
+            # Expansión del cluster
+            cola = deque(vecinos)
+            while cola:
+                j = cola.popleft()
+                if not visited[j]:
+                    visited[j] = True
+                    vecinos_j = obtener_vecinos(j)
+                    # Si también es núcleo → expandimos
+                    if len(vecinos_j) >= min_samples:
+                        cola.extend(vecinos_j)
+                # Si aún no pertenece a ningún cluster, se asigna
+                if labels[j] == -1:
+                    labels[j] = cluster_id
+    return labels
 
 # ---------------------------------------------------------------------
 # Utilidades y extracción de features (tus funciones originales)
@@ -281,8 +327,8 @@ def load_labels_and_bins():
             df_test_label[imdb_col] = np.nan
             df_train_label[imdb_col] = np.nan
 
-        df_test_label = df_test_label[["movieId", "title", "Genre", imdb_col]]
-        df_train_label = df_train_label[["movieId", "title", "Genre", imdb_col]]
+        df_test_label = df_test_label[["movieId", "title,","Genre", imdb_col]].rename(columns={"title,":"title"})
+        df_train_label = df_train_label[["movieId", "title,","Genre", imdb_col]].rename(columns={"title,":"title"})
 
         df_test_label["genre_p"] = df_test_label["Genre"].str.split("|").str[0]
         df_train_label["genre_p"] = df_train_label["Genre"].str.split("|").str[0]
@@ -340,8 +386,10 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
         )
         X_umap = reducer.fit_transform(X_lda)
 
-        db = DBSCAN(eps=0.8, min_samples=15, metric="euclidean").fit(X_umap)
-        labels = db.labels_
+        # ---- DBSCAN desde cero (en el espacio UMAP) ----
+        eps = 0.8
+        min_samples = 15
+        labels = dbscan_desde_cero(X_umap, eps=eps, min_samples=min_samples)
 
         nn_global = NearestNeighbors(n_neighbors=5, metric="euclidean")
         nn_global.fit(X_umap)
@@ -355,8 +403,8 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
             "scaler": scaler,
             "lda": lda,
             "umap": reducer,
-            "dbscan": db,
-            "labels": labels,
+            "labels": labels,                   # etiquetas de DBSCAN desde cero
+            "dbscan_params": {"eps": eps, "min_samples": min_samples},
             "X_umap": X_umap,
             "train_ids": train_ids,
             "label_encoder": enc,
@@ -532,7 +580,7 @@ if btn_run:
                     st.stop()
                 st.subheader("🖼️ Imagen base")
                 st.image(uploaded_file, width=220)
-                st.info("Extrayendo características con `build_features`...")
+                st.info("Extrayendo características con build_features...")
                 vq, qid = extract_query_features_with_build_features(
                     uploaded_file.getbuffer().tobytes(),
                     filename=uploaded_file.name if uploaded_file.name else "uploaded.jpg"
@@ -552,7 +600,7 @@ if btn_run:
                 st.subheader("🖼️ Imagen base")
                 if img_path is not None:
                     st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
-                    st.info("Extrayendo características con `build_features`…")
+                    st.info("Extrayendo características con build_features…")
                     with open(img_path, "rb") as f:
                         vq, qid = extract_query_features_with_build_features(
                             f.read(), filename=f"{_normalize_id(selected_train_movie)}.jpg"
@@ -568,7 +616,6 @@ if btn_run:
             result = recommend_from_feature_vector(vq, topk=10)
             st.success("Búsqueda completada")
 
-            # 3) Resumen de predicción
             # 3) Resumen de predicción
             colA, colB = st.columns(2)
             with colA:
@@ -607,10 +654,10 @@ if btn_run:
 with st.expander("ℹ️ Ayuda y notas", expanded=False):
     st.markdown("""
 - **Entrada**: puedes subir un archivo o seleccionar una película del conjunto de entrenamiento.
-- **Extracción de *features***: siempre con `build_features` escribiendo la imagen a un directorio temporal.
-- **Proyección**: `StandardScaler` → `LDA` (supervisado con género) → `UMAP`.
-- **Clustering**: `DBSCAN` sobre el espacio UMAP. El cluster del query se estima por mayoría de sus 5 vecinos globales.
-- **kNN de género**: `KNeighborsClassifier` sobre UMAP para predecir el género principal.
+- **Extracción de *features***: siempre con build_features escribiendo la imagen a un directorio temporal.
+- **Proyección**: StandardScaler → LDA (supervisado con género) → UMAP.
+- **Clustering**: DBSCAN (implementación propia) sobre el espacio UMAP. El cluster del query se estima por mayoría de sus 5 vecinos globales.
+- **kNN de género**: KNeighborsClassifier sobre UMAP para predecir el género principal.
 - **Vecinos recomendados**: 10 más cercanos **dentro del cluster**; si el cluster es ruido o pequeño, *fallback* global.
 - **Mensajes**: se notifica cada paso de carga, extracción y recomendación, y se muestran errores cuando corresponde.
 """)
