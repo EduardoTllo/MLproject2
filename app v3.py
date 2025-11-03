@@ -455,7 +455,7 @@ else:
         sel_genres = st.sidebar.multiselect("Filtrar por género", options=all_genres, default=[])
 
         # paginación
-        page_size = st.sidebar.slider("Miniaturas por página", min_value=10, max_value=50, value=20, step=10)
+        page_size = st.sidebar.slider("Miniaturas por página", min_value=10, max_value=50, value=10, step=10)
         # aplicar filtros
         df_f = df_gallery
         if q_title:
