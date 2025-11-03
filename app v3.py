@@ -654,9 +654,9 @@ def recommend_from_feature_vector(v_query: np.ndarray, exclude_ids=None, topk: i
 
 def plot_umap_distribution(result: dict, only_cluster: bool = False):
     """
-    Dibuja la distribución 2D (UMAP) de to do el set de entrenamiento,
-    coloreando por cluster DBSCAN, resaltando el query y sus vecinos recomendados.
-    Si only_cluster=True, muestra solo los puntos del cluster del query (si no es ruido).
+    Muestra la proyección UMAP en 2D.
+    Fondo: to dos los puntos (o solo el cluster del query) en gris claro, sin etiquetas de cluster.
+    Resaltado: query (estrella) y vecinos recomendados (anillos).
     """
     model = st.session_state["model"]
     X_umap = model["X_umap"]         # (N, 2)
@@ -664,66 +664,49 @@ def plot_umap_distribution(result: dict, only_cluster: bool = False):
     train_ids = model["train_ids"]   # (N,)
     id2idx = model.get("id2idx", {int(mid): i for i, mid in enumerate(train_ids)})
 
-    # Máscara opcional: solo cluster del query (cuando no es ruido)
-    mask = np.ones_like(labels, dtype=bool)
-    q_cluster = int(result["predicted_cluster"])
+    # Máscara opcional: solo cluster del query si aplica
+    q_cluster = int(result.get("predicted_cluster", -1))
     if only_cluster and q_cluster != -1:
         mask = labels == q_cluster
+    else:
+        mask = np.ones_like(labels, dtype=bool)
 
     Xp = X_umap[mask]
-    Lp = labels[mask]
+    visible_global_idx = np.where(mask)[0]
+    global_to_local = {g: i for i, g in enumerate(visible_global_idx)}
 
-    # Figura
+    import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(8, 6))
-    ax.set_title("Distribución 2D (UMAP) de películas")
+    ax.set_title("Distribución 2D (UMAP)")
     ax.set_xlabel("UMAP-1")
     ax.set_ylabel("UMAP-2")
 
-    # Paleta básica
-    cmap = plt.get_cmap("tab20")
+    # Fondo en gris claro, sin diferenciación por cluster
+    ax.scatter(Xp[:, 0], Xp[:, 1], s=8, alpha=0.25)
 
-    # Pintar por cluster (ruido en gris)
-    unique_labs = np.unique(Lp)
-    for lab in unique_labs:
-        lab_mask = Lp == lab
-        color = "lightgray" if lab == -1 else cmap(int(lab) % cmap.N)
-        label_txt = "Ruido (-1)" if lab == -1 else f"Cluster {int(lab)}"
-        ax.scatter(Xp[lab_mask, 0], Xp[lab_mask, 1],
-                   s=10, c=[color], alpha=0.35, label=label_txt)
-
-    # Vecinos recomendados (anillos)
+    # Vecinos recomendados como anillos
     neigh_ids = result.get("ids_similares", [])
-    neigh_idx = [id2idx[mid] for mid in neigh_ids if int(mid) in id2idx]
-    if len(neigh_idx) > 0:
-        # Solo los que pasan la máscara actual
-        # Mapeo: índices globales -> posiciones dentro de Xp
-        # Construimos un set de índices globales visibles
-        visible_global_idx = set(np.where(mask)[0].tolist())
-        neigh_idx_visible = [gi for gi in neigh_idx if gi in visible_global_idx]
-        if len(neigh_idx_visible) > 0:
-            # Convertimos índices globales visibles a índices relativos dentro de Xp
-            # truco: posición relativa = orden en np.where(mask)[0]
-            global_to_local = {g: i for i, g in enumerate(np.where(mask)[0])}
-            neigh_local = [global_to_local[g] for g in neigh_idx_visible]
-            ax.scatter(Xp[neigh_local, 0], Xp[neigh_local, 1],
-                       s=80, facecolors="none", edgecolors="k",
-                       linewidths=1.2, label="Vecinos recomendados")
+    neigh_idx_global = [id2idx[mid] for mid in neigh_ids if int(mid) in id2idx]
+    neigh_local = [global_to_local[g] for g in neigh_idx_global if g in global_to_local]
+    if len(neigh_local) > 0:
+        ax.scatter(Xp[neigh_local, 0], Xp[neigh_local, 1],
+                   s=90, facecolors="none", edgecolors="black",
+                   linewidths=1.1, label="Vecinos recomendados")
 
-    # Punto del query (estrella)
-    q_umap = np.array(result["vq_umap"]).reshape(-1)
+    # Query como estrella
+    q_umap = np.array(result.get("vq_umap", [])).ravel()
     if q_umap.size == 2:
         ax.scatter([q_umap[0]], [q_umap[1]],
-                   s=140, marker="*", c="red", edgecolors="k",
-                   linewidths=1.0, label="Query")
+                   s=140, marker="*", label="Query")
 
-    # Leyenda y rejilla
+    # Solo mostramos leyenda si hay algo resaltado
     handles, labels_txt = ax.get_legend_handles_labels()
-    # Evitar leyendas duplicadas
-    uniq = dict(zip(labels_txt, handles))
-    ax.legend(uniq.values(), uniq.keys(), frameon=True, fontsize=9, loc="best")
-    ax.grid(True, ls="--", alpha=0.2)
+    if len(handles) > 0:
+        ax.legend(frameon=True, fontsize=9, loc="best")
 
+    ax.grid(True, ls="--", alpha=0.2)
     st.pyplot(fig, clear_figure=True)
+
 
 # ---------------------------------------------------------------------
 # Ejecución
