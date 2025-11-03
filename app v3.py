@@ -654,9 +654,8 @@ def recommend_from_feature_vector(v_query: np.ndarray, exclude_ids=None, topk: i
 
 def plot_umap_distribution(result: dict, only_cluster: bool = False):
     """
-    Muestra la proyección UMAP en 2D.
-    Fondo: to dos los puntos (o solo el cluster del query) en gris claro, sin etiquetas de cluster.
-    Resaltado: query (estrella) y vecinos recomendados (anillos).
+    Proyección UMAP 2D coloreada por cluster (DBSCAN) SIN mostrar esos clusters en la leyenda.
+    Solo se muestran en la leyenda: Query y Vecinos recomendados.
     """
     model = st.session_state["model"]
     X_umap = model["X_umap"]         # (N, 2)
@@ -664,7 +663,7 @@ def plot_umap_distribution(result: dict, only_cluster: bool = False):
     train_ids = model["train_ids"]   # (N,)
     id2idx = model.get("id2idx", {int(mid): i for i, mid in enumerate(train_ids)})
 
-    # Máscara opcional: solo cluster del query si aplica
+    # Máscara opcional: solo cluster del query si corresponde
     q_cluster = int(result.get("predicted_cluster", -1))
     if only_cluster and q_cluster != -1:
         mask = labels == q_cluster
@@ -672,6 +671,7 @@ def plot_umap_distribution(result: dict, only_cluster: bool = False):
         mask = np.ones_like(labels, dtype=bool)
 
     Xp = X_umap[mask]
+    Lp = labels[mask]
     visible_global_idx = np.where(mask)[0]
     global_to_local = {g: i for i, g in enumerate(visible_global_idx)}
 
@@ -681,31 +681,46 @@ def plot_umap_distribution(result: dict, only_cluster: bool = False):
     ax.set_xlabel("UMAP-1")
     ax.set_ylabel("UMAP-2")
 
-    # Fondo en gris claro, sin diferenciación por cluster
-    ax.scatter(Xp[:, 0], Xp[:, 1], s=8, alpha=0.25)
+    # Colores por cluster, pero sin participar en la leyenda
+    cmap = plt.get_cmap("tab20")
+    unique_labs = np.unique(Lp)
+    for lab in unique_labs:
+        lab_mask = Lp == lab
+        color = "lightgray" if lab == -1 else cmap(int(lab) % cmap.N)
+        ax.scatter(
+            Xp[lab_mask, 0], Xp[lab_mask, 1],
+            s=10, c=[color], alpha=0.35, linewidths=0,
+            label="_nolegend_"  # <- etiquetas que empiezan con "_" no salen en la leyenda
+        )
 
-    # Vecinos recomendados como anillos
+    # Vecinos recomendados (anillos)
     neigh_ids = result.get("ids_similares", [])
     neigh_idx_global = [id2idx[mid] for mid in neigh_ids if int(mid) in id2idx]
     neigh_local = [global_to_local[g] for g in neigh_idx_global if g in global_to_local]
     if len(neigh_local) > 0:
-        ax.scatter(Xp[neigh_local, 0], Xp[neigh_local, 1],
-                   s=90, facecolors="none", edgecolors="black",
-                   linewidths=1.1, label="Vecinos recomendados")
+        ax.scatter(
+            Xp[neigh_local, 0], Xp[neigh_local, 1],
+            s=90, facecolors="none", edgecolors="black",
+            linewidths=1.1, label="Vecinos recomendados"
+        )
 
-    # Query como estrella
+    # Query (estrella)
     q_umap = np.array(result.get("vq_umap", [])).ravel()
     if q_umap.size == 2:
-        ax.scatter([q_umap[0]], [q_umap[1]],
-                   s=140, marker="*", label="Query")
+        ax.scatter(
+            [q_umap[0]], [q_umap[1]],
+            s=140, marker="*", c="red", edgecolors="k", linewidths=1.0,
+            label="Query"
+        )
 
-    # Solo mostramos leyenda si hay algo resaltado
+    # Solo se mostrarán "Query" y "Vecinos recomendados"
     handles, labels_txt = ax.get_legend_handles_labels()
     if len(handles) > 0:
         ax.legend(frameon=True, fontsize=9, loc="best")
 
     ax.grid(True, ls="--", alpha=0.2)
     st.pyplot(fig, clear_figure=True)
+
 
 
 # ---------------------------------------------------------------------
