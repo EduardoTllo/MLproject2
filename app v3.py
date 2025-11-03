@@ -327,8 +327,8 @@ def load_labels_and_bins():
             df_test_label[imdb_col] = np.nan
             df_train_label[imdb_col] = np.nan
 
-        df_test_label = df_test_label[["movieId", "title,","Genre", imdb_col]].rename(columns={"title,":"title"})
-        df_train_label = df_train_label[["movieId", "title,","Genre", imdb_col]].rename(columns={"title,":"title"})
+        df_test_label = df_test_label[["movieId", "title","Genre", imdb_col]].rename(columns={"title":"title"})
+        df_train_label = df_train_label[["movieId", "title","Genre", imdb_col]].rename(columns={"title":"title"})
 
         df_test_label["genre_p"] = df_test_label["Genre"].str.split("|").str[0]
         df_train_label["genre_p"] = df_train_label["Genre"].str.split("|").str[0]
