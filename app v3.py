@@ -59,9 +59,6 @@ st.markdown(
 4) **Clustering**: detectamos grupos naturales con **DBSCAN** (sin forzar forma ni número de clusters).  
 5) **Recomendación**: buscamos los **10** más cercanos con **kNN** sobre la proyección.
 
-**Mejora opcional**  
-- Activa el **reequilibrio por género** para que el *top* no se sesgue hacia géneros sobrerrepresentados en el *train*.  
-- Además, te mostramos **sugerencias de géneros minoritarios** más cercanos al query.
 """
 )
 
