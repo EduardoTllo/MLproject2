@@ -315,6 +315,7 @@ def load_labels_and_bins():
             df_test_label[imdb_col] = np.nan
             df_train_label[imdb_col] = np.nan
 
+        # Importante: columna correcta "title"
         df_test_label = df_test_label[["movieId", "title", "Genre", imdb_col]]
         df_train_label = df_train_label[["movieId", "title", "Genre", imdb_col]]
 
@@ -421,6 +422,7 @@ if input_mode == "Subir imagen":
 else:
     try:
         df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
+        st.sidebar.success("Metadatos cargados correctamente")
         options = df_train_label.dropna(subset=["movieId","title"]).copy()
         options["opt"] = options["movieId"].astype(int).astype(str) + " - " + options["title"].astype(str)
         selected_opt = st.sidebar.selectbox("Selecciona una película del Train", options["opt"].tolist())
@@ -429,6 +431,38 @@ else:
         st.sidebar.error(str(e))
 
 btn_run = st.sidebar.button("🔎 Recomendar", use_container_width=True)
+
+# ---------------------------------------------------------------------
+# Estado de carga
+# ---------------------------------------------------------------------
+with st.expander("📦 Estado de carga de datos", expanded=True):
+    try:
+        if "df_train_bin" not in st.session_state:
+            df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
+            st.session_state["df_train_label"] = df_train_label
+            st.session_state["df_test_label"] = df_test_label
+            st.session_state["df_train_bin"] = df_train_bin
+            st.session_state["df_test_bin"] = df_test_bin
+        st.success("CSV y metadatos cargados")
+    except Exception as e:
+        st.error(str(e))
+
+    try:
+        if "df_X_train" not in st.session_state:
+            st.session_state["df_X_train"] = load_train_features()
+        st.success("Features de entrenamiento (.npy) cargados")
+    except Exception as e:
+        st.error(str(e))
+
+    try:
+        if "model" not in st.session_state:
+            st.session_state["model"] = train_projection_and_cluster(
+                st.session_state["df_X_train"],
+                st.session_state["df_train_bin"]
+            )
+        st.success("Modelo LDA + UMAP + DBSCAN + kNN entrenado")
+    except Exception as e:
+        st.error(str(e))
 
 # ---------------------------------------------------------------------
 # Extraer features del input
@@ -458,16 +492,6 @@ def extract_query_features_with_build_features(file_bytes: bytes, filename: str)
 def recommend_from_feature_vector(v_query: np.ndarray, exclude_ids=None, topk: int = 10):
     if exclude_ids is None:
         exclude_ids = []
-
-    # Asegurar modelo en sesión (sin expander ni mensajes)
-    if "model" not in st.session_state:
-        st.session_state["df_X_train"] = load_train_features()
-        df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
-        st.session_state["df_train_bin"] = df_train_bin
-        st.session_state["model"] = train_projection_and_cluster(
-            st.session_state["df_X_train"],
-            st.session_state["df_train_bin"]
-        )
 
     model = st.session_state["model"]
     scaler = model["scaler"]
@@ -565,96 +589,107 @@ def recommend_from_feature_vector(v_query: np.ndarray, exclude_ids=None, topk: i
 # Ejecución
 # ---------------------------------------------------------------------
 if btn_run:
-    try:
-        exclude_ids = []
+    if "model" not in st.session_state or "df_X_train" not in st.session_state:
+        st.error("El modelo o las features no están listos. Revisa la sección de estado de carga.")
+    else:
+        try:
+            exclude_ids = []
 
-        # 1) Obtener imagen base
-        if input_mode == "Subir imagen":
-            if uploaded_file is None:
-                st.error("Por favor sube una imagen")
-                st.stop()
-            st.subheader("🖼️ Imagen base")
-            st.image(uploaded_file, width=220)
-            vq, qid = extract_query_features_with_build_features(
-                uploaded_file.getbuffer().tobytes(),
-                filename=uploaded_file.name if uploaded_file.name else "uploaded.jpg"
-            )
-            # si el nombre del archivo es un movieId que existe en train, excluirlo
-            try:
-                qid_int = int(str(qid))
-                # asegurar modelo para consultar train_ids
-                if "model" not in st.session_state:
-                    st.session_state["df_X_train"] = load_train_features()
-                    df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
-                    st.session_state["df_train_bin"] = df_train_bin
-                    st.session_state["model"] = train_projection_and_cluster(
-                        st.session_state["df_X_train"],
-                        st.session_state["df_train_bin"]
-                    )
-                if qid_int in set(st.session_state["model"]["train_ids"].tolist()):
-                    exclude_ids = [qid_int]
-            except Exception:
-                pass
+            # 1) Obtener imagen base
+            if input_mode == "Subir imagen":
+                if uploaded_file is None:
+                    st.error("Por favor sube una imagen")
+                    st.stop()
+                st.subheader("🖼️ Imagen base")
+                st.image(uploaded_file, width=220)
+                st.info("Extrayendo características con build_features...")
+                vq, qid = extract_query_features_with_build_features(
+                    uploaded_file.getbuffer().tobytes(),
+                    filename=uploaded_file.name if uploaded_file.name else "uploaded.jpg"
+                )
+                # si el nombre del archivo es un movieId que existe en train, excluirlo
+                try:
+                    qid_int = int(str(qid))
+                    model = st.session_state["model"]
+                    if qid_int in set(model["train_ids"].tolist()):
+                        exclude_ids = [qid_int]
+                except Exception:
+                    pass
+                st.success("Características extraídas correctamente")
 
-        else:
-            if selected_train_movie is None:
-                st.error("Selecciona una película del Train")
-                st.stop()
-
-            img_path = None
-            if os.path.isdir(TRAIN_IMAGE_DIR):
-                img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
-
-            st.subheader("🖼️ Imagen base")
-            if img_path is not None:
-                st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
-                with open(img_path, "rb") as f:
-                    vq, qid = extract_query_features_with_build_features(
-                        f.read(), filename=f"{_normalize_id(selected_train_movie)}.jpg"
-                    )
             else:
-                st.error("No se encontró el póster en la carpeta de entrenamiento.")
-                st.stop()
+                if selected_train_movie is None:
+                    st.error("Selecciona una película del Train")
+                    st.stop()
 
-            # Siempre excluimos el propio ID cuando se elige de train
-            exclude_ids = [selected_train_movie]
+                img_path = None
+                if os.path.isdir(TRAIN_IMAGE_DIR):
+                    img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
 
-        # 2) Recomendación
-        result = recommend_from_feature_vector(vq, exclude_ids=exclude_ids, topk=10)
+                st.subheader("🖼️ Imagen base")
+                if img_path is not None:
+                    st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
+                    st.info("Extrayendo características con build_features…")
+                    with open(img_path, "rb") as f:
+                        vq, qid = extract_query_features_with_build_features(
+                            f.read(), filename=f"{_normalize_id(selected_train_movie)}.jpg"
+                        )
+                else:
+                    st.error("No se encontró el póster en la carpeta de entrenamiento.")
+                    st.stop()
 
-        # 3) Resumen
-        colA, colB = st.columns(2)
-        with colA:
-            st.metric("Cluster asignado (DBSCAN)", str(result["predicted_cluster"]))
-        with colB:
-            st.metric("Género predicho", result["genre_pred"])
-        if result["use_global"]:
-            st.warning("Cluster muy pequeño o ruido. Se usó búsqueda global en todo el train.")
-        if exclude_ids:
-            st.info(f"Se excluyó el ID {exclude_ids[0]} de los resultados para evitar auto-match.")
+                # Siempre excluimos el propio ID cuando se elige de train
+                exclude_ids = [selected_train_movie]
+                st.success("Características extraídas correctamente")
 
-        # 4) Mostrar recomendaciones
-        st.subheader("🎯 Recomendaciones visualmente similares (KNN)")
-        ids_sim = result["ids_similares"]
-        dists = result["distancias"]
+            # 2) Recomendación
+            st.info("Calculando proyección, asignando cluster y encontrando vecinos...")
+            result = recommend_from_feature_vector(vq, exclude_ids=exclude_ids, topk=10)
+            st.success("Búsqueda completada")
 
-        if len(ids_sim) == 0:
-            st.write("No se encontraron vecinos tras excluir el ID del query.")
-        else:
-            n_cols = 5
-            rows = [ids_sim[i:i+n_cols] for i in range(0, len(ids_sim), n_cols)]
-            rows_d = [dists[i:i+n_cols] for i in range(0, len(dists), n_cols)]
+            # 3) Resumen
+            colA, colB = st.columns(2)
+            with colA:
+                st.metric("Cluster asignado (DBSCAN)", str(result["predicted_cluster"]))
+            with colB:
+                st.metric("Género predicho", result["genre_pred"])
+            if result["use_global"]:
+                st.warning("Cluster muy pequeño o ruido. Se usó búsqueda global en todo el train.")
+            if exclude_ids:
+                st.info(f"Se excluyó el ID {exclude_ids[0]} de los resultados para evitar auto-match.")
 
-            for r_ids, r_ds in zip(rows, rows_d):
-                cols = st.columns(n_cols, gap="small")
-                for c, mid, dd in zip(cols, r_ids, r_ds):
-                    with c:
-                        p = find_image_in_folder_by_id(mid, TRAIN_IMAGE_DIR)
-                        if p:
-                            st.image(p, use_column_width=True)
-                        else:
-                            st.info("Imagen no encontrada")
-                        st.caption(f"movieId {mid} • dist {dd:.3f}")
+            # 4) Mostrar recomendaciones
+            st.subheader("🎯 Recomendaciones visualmente similares (KNN)")
+            ids_sim = result["ids_similares"]
+            dists = result["distancias"]
 
-    except Exception as e:
-        st.error(f"Ocurrió un error: {e}")
+            if len(ids_sim) == 0:
+                st.write("No se encontraron vecinos tras excluir el ID del query.")
+            else:
+                n_cols = 5
+                rows = [ids_sim[i:i+n_cols] for i in range(0, len(ids_sim), n_cols)]
+                rows_d = [dists[i:i+n_cols] for i in range(0, len(dists), n_cols)]
+
+                for r_ids, r_ds in zip(rows, rows_d):
+                    cols = st.columns(n_cols, gap="small")
+                    for c, mid, dd in zip(cols, r_ids, r_ds):
+                        with c:
+                            p = find_image_in_folder_by_id(mid, TRAIN_IMAGE_DIR)
+                            if p:
+                                st.image(p, use_column_width=True)
+                            else:
+                                st.info("Imagen no encontrada")
+                            st.caption(f"movieId {mid} • dist {dd:.3f}")
+
+        except Exception as e:
+            st.error(f"Ocurrió un error: {e}")
+
+# ---------------------------------------------------------------------
+# Notas
+# ---------------------------------------------------------------------
+with st.expander("ℹ️ Ayuda y notas", expanded=False):
+    st.markdown("""
+- Se evita el *data leakage* y el auto-match excluyendo el `movieId` del query cuando está presente en **train**.
+- Si subes un archivo cuyo nombre es el `movieId` y existe en train, también se excluye.
+- Pipeline: StandardScaler → LDA → UMAP → DBSCAN propio → kNN sobre UMAP.
+""")
