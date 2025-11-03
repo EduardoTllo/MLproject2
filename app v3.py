@@ -20,6 +20,23 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 import umap
 
+@st.cache_data(show_spinner=False)
+def build_train_gallery(df_train_label: pd.DataFrame, train_dir: str):
+    """
+    Devuelve un DataFrame solo con items que tienen póster en disco,
+    y una columna 'img_path' con la ruta del archivo.
+    """
+    df = df_train_label.copy()
+    df["img_path"] = df["movieId"].apply(lambda mid: find_image_in_folder_by_id(mid, train_dir))
+    df = df[~df["img_path"].isna()]  # mantener solo los que tienen imagen
+    # normaliza columnas por si vienen vacías
+    if "Genre" not in df.columns:
+        df["Genre"] = ""
+    df["title"] = df["title"].astype(str).fillna("")
+    return df[["movieId", "title", "Genre", "img_path"]]
+
+
+
 # ---------------------------------------------------------------------
 # Rutas
 # ---------------------------------------------------------------------
@@ -421,16 +438,60 @@ if input_mode == "Subir imagen":
     uploaded_file = st.sidebar.file_uploader("Sube un póster (JPG, PNG, WEBP)", type=["jpg","jpeg","png","webp"])
 else:
     try:
+        # Cargamos metadatos (train/test) una sola vez
         df_train_label, df_test_label, df_train_bin, df_test_bin = load_labels_and_bins()
-        st.sidebar.success("Metadatos cargados correctamente")
-        options = df_train_label.dropna(subset=["movieId","title"]).copy()
-        options["opt"] = options["movieId"].astype(int).astype(str) + " - " + options["title"].astype(str)
-        selected_opt = st.sidebar.selectbox("Selecciona una película del Train", options["opt"].tolist())
-        selected_train_movie = int(selected_opt.split(" - ")[0]) if selected_opt else None
+        df_gallery = build_train_gallery(df_train_label, TRAIN_IMAGE_DIR)
+
+        # ------- Filtros en sidebar -------
+        st.sidebar.success("Metadatos cargados")
+        q_title = st.sidebar.text_input("🔎 Buscar título (contiene):", value="")
+        # lista de géneros desde el CSV
+        all_genres = sorted({g for s in df_gallery["Genre"].fillna("").astype(str)
+                               for g in s.split("|") if g})
+        sel_genres = st.sidebar.multiselect("Filtrar por género", options=all_genres, default=[])
+
+        # paginación
+        page_size = st.sidebar.slider("Miniaturas por página", min_value=10, max_value=50, value=20, step=10)
+        # aplicar filtros
+        df_f = df_gallery
+        if q_title:
+            df_f = df_f[df_f["title"].str.contains(q_title, case=False, na=False)]
+        if sel_genres:
+            df_f = df_f[df_f["Genre"].fillna("").apply(lambda s: any(g in s.split("|") for g in sel_genres))]
+
+        total = len(df_f)
+        max_pages = max(1, int(np.ceil(total / page_size)))
+        page = st.sidebar.number_input("Página", min_value=1, max_value=max_pages, value=1, step=1)
+
+        # subset de la página
+        start = (page - 1) * page_size
+        end = start + page_size
+        df_page = df_f.iloc[start:end]
+
+        st.subheader("🖼️ Elige una película del Train")
+        st.caption(f"Mostrando {len(df_page)} de {total} coincidencias")
+
+        # ------- Galería con botones de selección -------
+        ncols = 5
+        rows = [df_page.iloc[i:i+ncols] for i in range(0, len(df_page), ncols)]
+        for r in rows:
+            cols = st.columns(ncols, gap="small")
+            for col, (_, row) in zip(cols, r.iterrows()):
+                with col:
+                    st.image(row["img_path"], use_column_width=True,
+                             caption=f'{int(row["movieId"])} — {row["title"][:40]}')
+                    if st.button("Seleccionar", key=f"sel_{int(row['movieId'])}_{page}"):
+                        st.session_state["selected_train_movie"] = int(row["movieId"])
+
+        # Mostrar selección actual en el sidebar
+        selected_train_movie = st.session_state.get("selected_train_movie")
+        st.sidebar.write("🎯 Seleccionado:", selected_train_movie if selected_train_movie else "—")
+
     except Exception as e:
         st.sidebar.error(str(e))
 
 btn_run = st.sidebar.button("🔎 Recomendar", use_container_width=True)
+
 
 # ---------------------------------------------------------------------
 # Estado de carga
@@ -600,14 +661,15 @@ if btn_run:
                 if uploaded_file is None:
                     st.error("Por favor sube una imagen")
                     st.stop()
+
                 st.subheader("🖼️ Imagen base")
                 st.image(uploaded_file, width=220)
-                st.info("Extrayendo características con build_features...")
+
                 vq, qid = extract_query_features_with_build_features(
                     uploaded_file.getbuffer().tobytes(),
                     filename=uploaded_file.name if uploaded_file.name else "uploaded.jpg"
                 )
-                # si el nombre del archivo es un movieId que existe en train, excluirlo
+                # Si el nombre del archivo es un movieId presente en train, excluir
                 try:
                     qid_int = int(str(qid))
                     model = st.session_state["model"]
@@ -615,21 +677,18 @@ if btn_run:
                         exclude_ids = [qid_int]
                 except Exception:
                     pass
-                st.success("Características extraídas correctamente")
 
             else:
+                # >>>> NUEVO: tomamos la selección hecha en la galería <<<<
+                selected_train_movie = st.session_state.get("selected_train_movie")
                 if selected_train_movie is None:
-                    st.error("Selecciona una película del Train")
+                    st.error("Selecciona una película del Train desde la galería antes de continuar.")
                     st.stop()
 
-                img_path = None
-                if os.path.isdir(TRAIN_IMAGE_DIR):
-                    img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
-
+                img_path = find_image_in_folder_by_id(selected_train_movie, TRAIN_IMAGE_DIR)
                 st.subheader("🖼️ Imagen base")
                 if img_path is not None:
                     st.image(img_path, width=220, caption=f"movieId {selected_train_movie}")
-                    st.info("Extrayendo características con build_features…")
                     with open(img_path, "rb") as f:
                         vq, qid = extract_query_features_with_build_features(
                             f.read(), filename=f"{_normalize_id(selected_train_movie)}.jpg"
@@ -640,7 +699,6 @@ if btn_run:
 
                 # Siempre excluimos el propio ID cuando se elige de train
                 exclude_ids = [selected_train_movie]
-                st.success("Características extraídas correctamente")
 
             # 2) Recomendación
             st.info("Calculando proyección, asignando cluster y encontrando vecinos...")
@@ -653,6 +711,7 @@ if btn_run:
                 st.metric("Cluster asignado (DBSCAN)", str(result["predicted_cluster"]))
             with colB:
                 st.metric("Género predicho", result["genre_pred"])
+
             if result["use_global"]:
                 st.warning("Cluster muy pequeño o ruido. Se usó búsqueda global en todo el train.")
             if exclude_ids:
@@ -662,14 +721,12 @@ if btn_run:
             st.subheader("🎯 Recomendaciones visualmente similares (KNN)")
             ids_sim = result["ids_similares"]
             dists = result["distancias"]
-
             if len(ids_sim) == 0:
                 st.write("No se encontraron vecinos tras excluir el ID del query.")
             else:
                 n_cols = 5
                 rows = [ids_sim[i:i+n_cols] for i in range(0, len(ids_sim), n_cols)]
                 rows_d = [dists[i:i+n_cols] for i in range(0, len(dists), n_cols)]
-
                 for r_ids, r_ds in zip(rows, rows_d):
                     cols = st.columns(n_cols, gap="small")
                     for c, mid, dd in zip(cols, r_ids, r_ds):
@@ -684,12 +741,11 @@ if btn_run:
         except Exception as e:
             st.error(f"Ocurrió un error: {e}")
 
+
 # ---------------------------------------------------------------------
 # Notas
 # ---------------------------------------------------------------------
 with st.expander("ℹ️ Ayuda y notas", expanded=False):
     st.markdown("""
-- Se evita el *data leakage* y el auto-match excluyendo el `movieId` del query cuando está presente en **train**.
-- Si subes un archivo cuyo nombre es el `movieId` y existe en train, también se excluye.
 - Pipeline: StandardScaler → LDA → UMAP → DBSCAN propio → kNN sobre UMAP.
 """)
