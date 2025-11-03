@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from collections import deque  # para DBSCAN desde cero
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -403,21 +404,24 @@ def train_projection_and_cluster(df_X_train, df_train_bin):
         knn_genre = KNeighborsClassifier(n_neighbors=7, metric="euclidean")
         knn_genre.fit(X_umap, y)
 
+        # ...
         train_ids = df["movieId"].values
 
         return {
-            "scaler": scaler,
-            "lda": lda,
-            "umap": reducer,
-            "labels": labels,
-            "dbscan_params": {"eps": eps, "min_samples": min_samples},
-            "X_umap": X_umap,
-            "train_ids": train_ids,
-            "label_encoder": enc,
-            "nn_global": nn_global,
-            "knn_genre": knn_genre,
-            "train_cols": df_X_train.drop(columns=["movieId"], errors="ignore").columns
+        "scaler": scaler,
+        "lda": lda,
+        "umap": reducer,
+        "labels": labels,
+        "dbscan_params": {"eps": eps, "min_samples": min_samples},
+        "X_umap": X_umap,
+        "train_ids": train_ids,
+        "label_encoder": enc,
+        "nn_global": nn_global,
+        "knn_genre": knn_genre,
+        "train_cols": df_X_train.drop(columns=["movieId"], errors="ignore").columns,
+        "id2idx": {int(mid): i for i, mid in enumerate(train_ids)}  # << NUEVO
         }
+
     except Exception as e:
         raise RuntimeError(f"Error entrenando proyección y clustering: {e}")
 
@@ -637,14 +641,89 @@ def recommend_from_feature_vector(v_query: np.ndarray, exclude_ids=None, topk: i
     d, ix = nn.kneighbors(vq_umap)
     ids_similares = [int(base_ids[j]) for j in ix[0]]
 
+
     return {
         "predicted_cluster": predicted_cluster,
         "use_global": use_global,
         "genre_pred": top_genre,
         "genre_conf": top_genre_prob,
         "ids_similares": ids_similares,
-        "distancias": d[0].tolist()
+        "distancias": d[0].tolist(),
+        "vq_umap": vq_umap.flatten()
     }
+
+def plot_umap_distribution(result: dict, only_cluster: bool = False):
+    """
+    Dibuja la distribución 2D (UMAP) de to do el set de entrenamiento,
+    coloreando por cluster DBSCAN, resaltando el query y sus vecinos recomendados.
+    Si only_cluster=True, muestra solo los puntos del cluster del query (si no es ruido).
+    """
+    model = st.session_state["model"]
+    X_umap = model["X_umap"]         # (N, 2)
+    labels = model["labels"]         # (N,)
+    train_ids = model["train_ids"]   # (N,)
+    id2idx = model.get("id2idx", {int(mid): i for i, mid in enumerate(train_ids)})
+
+    # Máscara opcional: solo cluster del query (cuando no es ruido)
+    mask = np.ones_like(labels, dtype=bool)
+    q_cluster = int(result["predicted_cluster"])
+    if only_cluster and q_cluster != -1:
+        mask = labels == q_cluster
+
+    Xp = X_umap[mask]
+    Lp = labels[mask]
+
+    # Figura
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.set_title("Distribución 2D (UMAP) de películas")
+    ax.set_xlabel("UMAP-1")
+    ax.set_ylabel("UMAP-2")
+
+    # Paleta básica
+    cmap = plt.get_cmap("tab20")
+
+    # Pintar por cluster (ruido en gris)
+    unique_labs = np.unique(Lp)
+    for lab in unique_labs:
+        lab_mask = Lp == lab
+        color = "lightgray" if lab == -1 else cmap(int(lab) % cmap.N)
+        label_txt = "Ruido (-1)" if lab == -1 else f"Cluster {int(lab)}"
+        ax.scatter(Xp[lab_mask, 0], Xp[lab_mask, 1],
+                   s=10, c=[color], alpha=0.35, label=label_txt)
+
+    # Vecinos recomendados (anillos)
+    neigh_ids = result.get("ids_similares", [])
+    neigh_idx = [id2idx[mid] for mid in neigh_ids if int(mid) in id2idx]
+    if len(neigh_idx) > 0:
+        # Solo los que pasan la máscara actual
+        # Mapeo: índices globales -> posiciones dentro de Xp
+        # Construimos un set de índices globales visibles
+        visible_global_idx = set(np.where(mask)[0].tolist())
+        neigh_idx_visible = [gi for gi in neigh_idx if gi in visible_global_idx]
+        if len(neigh_idx_visible) > 0:
+            # Convertimos índices globales visibles a índices relativos dentro de Xp
+            # truco: posición relativa = orden en np.where(mask)[0]
+            global_to_local = {g: i for i, g in enumerate(np.where(mask)[0])}
+            neigh_local = [global_to_local[g] for g in neigh_idx_visible]
+            ax.scatter(Xp[neigh_local, 0], Xp[neigh_local, 1],
+                       s=80, facecolors="none", edgecolors="k",
+                       linewidths=1.2, label="Vecinos recomendados")
+
+    # Punto del query (estrella)
+    q_umap = np.array(result["vq_umap"]).reshape(-1)
+    if q_umap.size == 2:
+        ax.scatter([q_umap[0]], [q_umap[1]],
+                   s=140, marker="*", c="red", edgecolors="k",
+                   linewidths=1.0, label="Query")
+
+    # Leyenda y rejilla
+    handles, labels_txt = ax.get_legend_handles_labels()
+    # Evitar leyendas duplicadas
+    uniq = dict(zip(labels_txt, handles))
+    ax.legend(uniq.values(), uniq.keys(), frameon=True, fontsize=9, loc="best")
+    ax.grid(True, ls="--", alpha=0.2)
+
+    st.pyplot(fig, clear_figure=True)
 
 # ---------------------------------------------------------------------
 # Ejecución
@@ -737,6 +816,12 @@ if btn_run:
                             else:
                                 st.info("Imagen no encontrada")
                             st.caption(f"movieId {mid} • dist {dd:.3f}")
+            # 5) Visualización 2D posterior a la predicción
+            st.subheader("📈 Distribución 2D según características visuales")
+            only_cluster = st.checkbox("Mostrar solo el cluster del query", value=False,
+                                       help="Si el query fue clasificado como ruido (-1), se mostrará todo el set.")
+            plot_umap_distribution(result, only_cluster=only_cluster)
+
 
         except Exception as e:
             st.error(f"Ocurrió un error: {e}")
