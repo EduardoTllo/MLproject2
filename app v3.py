@@ -53,7 +53,7 @@ st.title("🎬 Recomendación de Películas por Similitud Visual")
 st.markdown(
     """
 **¿Cómo funciona?**  
-1) **Entrada**: sube un póster o elige uno del set de entrenamiento.  
+1) **Entrada**: sube un póster o elige uno del set de entrenamiento y presiona 🔎 Recomendar.  
 2) **Extracción**: obtenemos rasgos visuales de color (HSV), textura (LBP, GLCM), bordes (HOG) y forma (Hu).  
 3) **Proyección**: mapeamos el espacio a 2D con **LDA → UMAP** para que la distancia ≈ similitud visual.  
 4) **Clustering**: detectamos grupos naturales con **DBSCAN** (sin forzar forma ni número de clusters).  
