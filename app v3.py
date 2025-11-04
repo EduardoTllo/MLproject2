@@ -806,7 +806,7 @@ if btn_run:
                 st.info(f"Se excluyó el ID {exclude_ids[0]} de los resultados para evitar auto-match.")
 
             # 4) Mostrar recomendaciones
-            st.subheader("🎯 Recomendaciones visualmente similares (KNN)")
+            st.subheader("🎯 Recomendaciones visualmente similares")
             ids_sim = result["ids_similares"]
             dists = result["distancias"]
             if len(ids_sim) == 0:
